@@ -372,7 +372,7 @@ function Kop({ meta, logoL, logoR }) {
       </div>
     );
   };
-  const big = { fontSize: 15, fontWeight: 700, fontFamily: "Arial, Helvetica, sans-serif", lineHeight: 1.3 };
+  const big = { fontSize: 15, fontWeight: 700, fontFamily: "Arial, Helvetica, sans-serif", lineHeight: "20px" };
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -383,7 +383,7 @@ function Kop({ meta, logoL, logoR }) {
           ))}
           <div style={big}>{String(meta.schoolName || "").toUpperCase()}</div>
           {meta.address && (
-            <div style={{ fontSize: 11, fontStyle: "italic", fontFamily: '"Times New Roman", Times, serif', lineHeight: 1.3 }}>
+            <div style={{ fontSize: 11, fontStyle: "italic", fontFamily: '"Times New Roman", Times, serif', lineHeight: "14px" }}>
               {meta.address}
             </div>
           )}
@@ -396,8 +396,8 @@ function Kop({ meta, logoL, logoR }) {
   );
 }
 
-const th = { border: "1px solid #000000", padding: "4px 6px", background: "#e5e7eb", fontSize: 12, textAlign: "center", fontWeight: 700 };
-const td = { border: "1px solid #000000", padding: "0 6px", fontSize: 12, height: 28, boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
+const th = { border: "1px solid #000000", padding: "0 6px", background: "#e5e7eb", fontSize: 12, height: 32, lineHeight: "30px", boxSizing: "border-box", textAlign: "center", fontWeight: 700 };
+const td = { border: "1px solid #000000", padding: "0 6px", fontSize: 12, height: 28, lineHeight: "26px", boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 
 function ReportPage({ meta, logoL, logoR, rows, startIndex, pageNo, pageCount, first, footer, stats, kkm, totalQ }) {
   return (
@@ -512,17 +512,27 @@ function ReportPage({ meta, logoL, logoR, rows, startIndex, pageNo, pageCount, f
 
 function LjkTemplate({ meta, totalQ, logoL, logoR }) {
   const FONT = "Arial, Helvetica, sans-serif";
+
+  // Tinggi setiap blok dibuat tetap supaya komposisi identik di preview web dan di PDF.
+  const PAD_T = 40, PAD_BOT = 46;
+  const H_ID = 84, H_KOP = 92, H_TITLE = 66, H_INFO = 44, H_NOTE = 30;
+  const GAP_SUM = 10 + 12 + 8 + 6 + 8;
+  const GRID_H = PAGE_H - PAD_T - PAD_BOT - (H_ID + H_KOP + H_TITLE + H_INFO + H_NOTE) - GAP_SUM;
+
+  // Grid jawaban: tinggi baris menyesuaikan jumlah soal agar grid mengisi sisa halaman.
   const rows = Math.ceil(totalQ / 3);
-  const rowH = Math.max(16, Math.min(30, Math.floor(620 / rows)));
-  const b = Math.max(12, Math.min(22, rowH - 6)); // diameter bulatan
-  const GAP = 8, NUMW = 30, HEAD_H = 24, PAD_B = 8, COLGAP = 15;
+  const HEAD_H = 28, FOOT_H = 10, NUMW = 30, COLGAP = 15;
+  const rowH = Math.max(16, Math.min(48, Math.floor((GRID_H - HEAD_H - FOOT_H) / rows)));
+  const b = Math.max(12, Math.min(26, rowH - 12)); // diameter bulatan
+  const GAP = b >= 22 ? 10 : 8;
   const GW = PAGE_W - 80;
   const COLW = (GW - 2 * COLGAP) / 3;
   const contentW = NUMW + 5 * b + 4 * GAP;
-  const boxH = HEAD_H + rows * rowH + PAD_B;
+  const boxH = HEAD_H + rows * rowH + FOOT_H;
   const fs = Math.round(b * 0.5 * 10) / 10;
-  // Huruf kapital & angka Arial: tinggi ≈ 0.716em, jadi pusat visualnya ≈ 0.358em di atas garis dasar.
-  // Posisi y dihitung manual (bukan dominant-baseline) supaya sama persis di browser dan di hasil PDF.
+  const fsNum = b >= 20 ? 13 : 12;
+  // Huruf kapital & angka Arial setinggi ≈ 0.716em, pusat visualnya ≈ 0.358em di atas garis dasar.
+  // Posisi y dihitung manual (bukan dominant-baseline atau perataan CSS) agar sama persis di browser dan PDF.
   const dy = (size) => size * 0.358;
   const corner = (pos) => <div style={{ position: "absolute", width: 18, height: 18, background: "#000000", ...pos }} />;
 
@@ -536,7 +546,7 @@ function LjkTemplate({ meta, totalQ, logoL, logoR }) {
     );
     LETTERS.forEach((l, i) =>
       items.push(
-        <text key={`h${l}`} x={cx(i)} y={HEAD_H / 2 + dy(11)} textAnchor="middle" fontFamily={FONT} fontSize="11" fontWeight="700" fill="#000000">
+        <text key={`h${l}`} x={cx(i)} y={HEAD_H / 2 + dy(12)} textAnchor="middle" fontFamily={FONT} fontSize="12" fontWeight="700" fill="#000000">
           {l}
         </text>
       )
@@ -546,7 +556,7 @@ function LjkTemplate({ meta, totalQ, logoL, logoR }) {
       if (n > totalQ) break;
       const cy = HEAD_H + r * rowH + rowH / 2;
       items.push(
-        <text key={`n${n}`} x={x0 + NUMW - 8} y={cy + dy(12)} textAnchor="end" fontFamily={FONT} fontSize="12" fontWeight="700" fill="#000000">
+        <text key={`n${n}`} x={x0 + NUMW - GAP} y={cy + dy(fsNum)} textAnchor="end" fontFamily={FONT} fontSize={fsNum} fontWeight="700" fill="#000000">
           {n}
         </text>
       );
@@ -562,17 +572,22 @@ function LjkTemplate({ meta, totalQ, logoL, logoR }) {
     return <g key={c}>{items}</g>;
   });
 
+  // Kotak identitas digambar sebagai SVG (bukan tabel HTML) agar teks tepat di tengah barisnya di PDF.
+  const school = String(meta.schoolName || "").toUpperCase();
   const idRows = [
-    ["No. Peserta", "", 24],
-    ["Nama", "", 34],
-    ["Sekolah", String(meta.schoolName || "").toUpperCase(), 24],
+    ["No. Peserta", "", 1, 24],
+    ["Nama", "", 25, 34],
+    ["Sekolah", school, 59, 24],
   ];
+  const valFs = 12;
+  const valAvail = 366 - 106 - 16;
+  const valFit = school.length * valFs * 0.62 > valAvail ? { textLength: valAvail, lengthAdjust: "spacingAndGlyphs" } : {};
 
   return (
     <div
       data-page
       style={{
-        width: PAGE_W, height: PAGE_H, boxSizing: "border-box", padding: "44px 40px", background: "#ffffff",
+        width: PAGE_W, height: PAGE_H, boxSizing: "border-box", padding: `${PAD_T}px 40px ${PAD_BOT}px`, background: "#ffffff",
         color: "#000000", fontFamily: FONT, position: "relative", overflow: "hidden",
       }}
     >
@@ -582,51 +597,57 @@ function LjkTemplate({ meta, totalQ, logoL, logoR }) {
       {corner({ bottom: 16, right: 16 })}
 
       {/* Kotak identitas siswa (kanan atas) */}
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-        <table style={{ borderCollapse: "collapse", width: 368, fontSize: 13 }}>
-          <tbody>
-            {idRows.map(([k, v, h]) => (
-              <tr key={k} style={{ height: h }}>
-                <td style={{ border: "1px solid #000000", width: 105, height: h, padding: "0 8px", fontWeight: 700, boxSizing: "border-box" }}>{k}</td>
-                <td style={{ border: "1px solid #000000", height: h, padding: "0 8px", fontSize: 12, boxSizing: "border-box" }}>{v}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div style={{ display: "flex", justifyContent: "flex-end", height: H_ID }}>
+        <svg width={368} height={H_ID} viewBox={`0 0 368 ${H_ID}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
+          <rect x={1} y={1} width={366} height={82} fill="none" stroke="#000000" strokeWidth="1.5" />
+          <line x1={106} y1={1} x2={106} y2={83} stroke="#000000" strokeWidth="1.5" />
+          {idRows.map(([k, v, top, h], i) => {
+            const cy = top + h / 2;
+            return (
+              <g key={k}>
+                {i > 0 && <line x1={1} y1={top} x2={367} y2={top} stroke="#000000" strokeWidth="1.5" />}
+                <text x={9} y={cy + dy(13)} fontFamily={FONT} fontSize="13" fontWeight="700" fill="#000000">{k}</text>
+                {v && (
+                  <text x={114} y={cy + dy(valFs)} fontFamily={FONT} fontSize={valFs} fill="#000000" {...valFit}>{v}</text>
+                )}
+              </g>
+            );
+          })}
+        </svg>
       </div>
 
-      <div style={{ marginTop: 10 }}>
+      <div style={{ marginTop: 10, minHeight: H_KOP }}>
         <Kop meta={meta} logoL={logoL} logoR={logoR} />
       </div>
 
       {/* Judul */}
-      <div style={{ textAlign: "center", marginTop: 10, lineHeight: 1.3 }}>
-        <div style={{ fontSize: 22, fontWeight: 700 }}>LEMBAR JAWAB</div>
-        {meta.examTitle && <div style={{ fontSize: 14, fontWeight: 700 }}>{String(meta.examTitle).toUpperCase()}</div>}
-        {meta.tahunAjaran && <div style={{ fontSize: 13 }}>TAHUN AJARAN {meta.tahunAjaran}</div>}
+      <div style={{ marginTop: 12, height: H_TITLE, textAlign: "center" }}>
+        <div style={{ fontSize: 22, fontWeight: 700, lineHeight: "28px" }}>LEMBAR JAWAB</div>
+        {meta.examTitle && <div style={{ fontSize: 14, fontWeight: 700, lineHeight: "18px" }}>{String(meta.examTitle).toUpperCase()}</div>}
+        {meta.tahunAjaran && <div style={{ fontSize: 13, lineHeight: "17px" }}>TAHUN AJARAN {meta.tahunAjaran}</div>}
       </div>
 
       {/* Mata pelajaran & kelas */}
-      <table style={{ marginTop: 10, marginLeft: 140, fontSize: 13, borderCollapse: "collapse" }}>
-        <tbody>
-          {[["Mata Pelajaran", meta.subject], ["Kelas", meta.className]].map(([k, v]) => (
-            <tr key={k} style={{ height: 22 }}>
-              <td style={{ width: 120, fontWeight: 700 }}>{k}</td>
-              <td style={{ width: 16, fontWeight: 700 }}>:</td>
-              <td>{v}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div style={{ marginTop: 8, height: H_INFO, marginLeft: 140, fontSize: 13 }}>
+        {[["Mata Pelajaran", meta.subject], ["Kelas", meta.className]].map(([k, v]) => (
+          <div key={k} style={{ display: "flex", height: 22, lineHeight: "22px" }}>
+            <div style={{ width: 120, fontWeight: 700 }}>{k}</div>
+            <div style={{ width: 16, fontWeight: 700 }}>:</div>
+            <div>{v}</div>
+          </div>
+        ))}
+      </div>
 
-      <div style={{ fontSize: 10.5, margin: "8px 0", lineHeight: 1.4 }}>
+      <div style={{ marginTop: 6, height: H_NOTE, fontSize: 10.5, lineHeight: "15px" }}>
         Petunjuk: pilih satu jawaban untuk setiap nomor dengan menghitamkan bulatan (●) atau memberi tanda silang (X).
         Gunakan pensil 2B atau pulpen hitam, dan jangan melipat lembar ini.
       </div>
 
-      <svg width={GW} height={boxH} viewBox={`0 0 ${GW} ${boxH}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
-        {columns}
-      </svg>
+      <div style={{ marginTop: 8 }}>
+        <svg width={GW} height={boxH} viewBox={`0 0 ${GW} ${boxH}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
+          {columns}
+        </svg>
+      </div>
     </div>
   );
 }
