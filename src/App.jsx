@@ -2,11 +2,11 @@
  * AI Grader Sistem — koreksi LJK otomatis dengan Gemini Vision (client-side only)
  *
  * Instalasi paket:
- *   npm i lucide-react html2canvas jspdf
+ *   npm i lucide-react jspdf
  * Tailwind CSS harus sudah aktif di proyek (utility class bawaan saja, tanpa konfigurasi khusus).
  *
- * Catatan: bagian yang dicetak/diekspor (laporan PDF & template LJK) memakai inline style
- * berwarna hex agar kompatibel dengan html2canvas (tidak mendukung warna oklch milik Tailwind v4).
+ * Catatan: PDF laporan & template LJK digambar langsung dengan jsPDF (vektor), bukan tangkapan layar,
+ * supaya hasilnya sama persis dengan pratinjau. Komponen pratinjau memakai inline style berwarna hex.
  */
 import React, { useState, useMemo, useRef, useEffect } from "react";
 import {
@@ -14,7 +14,6 @@ import {
   Download, Printer, Loader2, CheckCircle2, XCircle, AlertTriangle, Eye, EyeOff,
   Play, ChevronDown, ChevronUp, ImagePlus, FileDown, RotateCcw, X,
 } from "lucide-react";
-import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
 
 /* ───────────────────────── Konstanta & helper ───────────────────────── */
@@ -258,25 +257,6 @@ async function callGemini({ apiKey, model, base64, totalQ }) {
 }
 
 /* ───────────────────────── Ekspor PDF ───────────────────────── */
-
-async function pagesToCanvasImages(elements) {
-  const imgs = [];
-  for (const el of elements) {
-    const canvas = await html2canvas(el, { scale: 2, backgroundColor: "#ffffff", useCORS: true, logging: false });
-    imgs.push(canvas.toDataURL("image/jpeg", 0.92));
-  }
-  return imgs;
-}
-
-async function exportPagesToPdf(elements, filename) {
-  const imgs = await pagesToCanvasImages(elements);
-  const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
-  imgs.forEach((img, i) => {
-    if (i > 0) pdf.addPage();
-    pdf.addImage(img, "JPEG", 0, 0, 210, 297);
-  });
-  pdf.save(filename);
-}
 
 /* ───────────────────────── Komponen UI kecil ───────────────────────── */
 
@@ -741,41 +721,8 @@ function buildLjkPdf({ meta, totalQ, logoL, logoR }) {
 
   // kop surat
   const kopTop = PAD_T + H_ID + 10;
-  const BOX = 80;
-  const lines = String(meta.instansi || "").split("\n").map((s) => s.trim()).filter(Boolean).map((t) => t.toUpperCase());
-  lines.push(String(meta.schoolName || "").toUpperCase());
-  const hasAddr = !!meta.address;
-  const textH = lines.length * 20 + (hasAddr ? 14 : 0);
-  const rowH = Math.max(BOX, textH);
-  const textW = PAGE_W - 2 * PAD_X - 2 * (BOX + 12);
-  let ty = kopTop + (rowH - textH) / 2;
-  lines.forEach((t) => {
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(px(15));
-    const w = doc.getTextWidth(t) / S;
-    const size = w > textW ? (15 * textW) / w : 15;
-    put(t, PAGE_W / 2, lineBase(ty, 20, size), size, { bold: true, align: "center" });
-    ty += 20;
-  });
-  if (hasAddr) {
-    doc.setFont("times", "italic");
-    doc.setFontSize(px(11));
-    const w = doc.getTextWidth(meta.address) / S;
-    const size = w > textW ? (11 * textW) / w : 11;
-    put(meta.address, PAGE_W / 2, lineBase(ty, 14, size), size, { font: "times", style: "italic", align: "center" });
-  }
-  [[logoL, PAD_X], [logoR, PAGE_W - PAD_X - BOX]].forEach(([l, bx]) => {
-    const f = fitBox(l, BOX);
-    if (!f) return;
-    try {
-      doc.addImage(l.src, "PNG", px(bx + (BOX - f.w) / 2), px(kopTop + (rowH - f.h) / 2), px(f.w), px(f.h));
-    } catch {
-      /* logo gagal disematkan: lewati */
-    }
-  });
-  doc.setFillColor(0, 0, 0);
-  doc.rect(px(PAD_X), px(kopTop + rowH + 6), px(PAGE_W - 2 * PAD_X), px(3), "F");
-  doc.rect(px(PAD_X), px(kopTop + rowH + 11), px(PAGE_W - 2 * PAD_X), px(1), "F");
+  const kop = drawKopPdf(doc, meta, logoL, logoR, PAD_X, PAGE_W - 2 * PAD_X, kopTop);
+  const rowH = kop.rowH;
 
   // judul
   const titleTop = kopTop + Math.max(H_KOP, rowH + 12) + 12;
@@ -805,6 +752,182 @@ function buildLjkPdf({ meta, totalQ, logoL, logoR }) {
 
   // kotak pilihan ganda
   drawPrims(ljkGrid(totalQ).prims, PAD_X, noteTop + H_NOTE + 8);
+  return doc;
+}
+
+/* Kop surat untuk PDF vektor: logo kiri-kanan, teks tengah (membungkus baris seperti di pratinjau), garis tebal-tipis. */
+function drawKopPdf(doc, meta, logoL, logoR, left, width, top) {
+  const S = doc.internal.pageSize.getWidth() / PAGE_W;
+  const px = (v) => v * S;
+  const BOX = 80, GAP = 12;
+  const textW = width - 2 * (BOX + GAP);
+  const raw = String(meta.instansi || "").split("\n").map((s) => s.trim()).filter(Boolean).map((t) => t.toUpperCase());
+  raw.push(String(meta.schoolName || "").toUpperCase());
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(px(15));
+  const lines = raw.flatMap((t) => doc.splitTextToSize(t, px(textW)));
+  let addr = [];
+  if (meta.address) {
+    doc.setFont("times", "italic");
+    doc.setFontSize(px(11));
+    addr = doc.splitTextToSize(String(meta.address), px(textW));
+  }
+  const textH = lines.length * 20 + addr.length * 14;
+  const rowH = Math.max(BOX, textH);
+  const cx = left + width / 2;
+  doc.setTextColor(0, 0, 0);
+  let ty = top + (rowH - textH) / 2;
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(px(15));
+  lines.forEach((t) => {
+    doc.text(t, px(cx), px(lineBase(ty, 20, 15)), { align: "center" });
+    ty += 20;
+  });
+  doc.setFont("times", "italic");
+  doc.setFontSize(px(11));
+  addr.forEach((t) => {
+    doc.text(t, px(cx), px(lineBase(ty, 14, 11)), { align: "center" });
+    ty += 14;
+  });
+  [[logoL, left], [logoR, left + width - BOX]].forEach(([l, bx]) => {
+    const f = fitBox(l, BOX);
+    if (!f) return;
+    try {
+      doc.addImage(l.src, "PNG", px(bx + (BOX - f.w) / 2), px(top + (rowH - f.h) / 2), px(f.w), px(f.h));
+    } catch {
+      /* logo gagal disematkan: lewati */
+    }
+  });
+  doc.setFillColor(0, 0, 0);
+  doc.rect(px(left), px(top + rowH + 6), px(width), px(3), "F");
+  doc.rect(px(left), px(top + rowH + 11), px(width), px(1), "F");
+  return { rowH, h: rowH + 12 };
+}
+
+/* PDF vektor untuk laporan hasil koreksi (menggantikan tangkapan html2canvas yang posisinya bergeser) */
+function buildReportPdf({ meta, logoL, logoR, pages, stats, kkm, totalQ }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const S = doc.internal.pageSize.getWidth() / PAGE_W;
+  const px = (v) => v * S;
+  const INK = [17, 24, 39];
+  const txt = (s, x, y, size, { bold = false, italic = false, align = "left", color = INK } = {}) => {
+    doc.setFont("times", bold && italic ? "bolditalic" : bold ? "bold" : italic ? "italic" : "normal");
+    doc.setFontSize(px(size));
+    doc.setTextColor(...color);
+    doc.text(String(s), px(x), px(y), { align });
+  };
+  const fit = (s, size, maxW, bold) => {
+    doc.setFont("times", bold ? "bold" : "normal");
+    doc.setFontSize(px(size));
+    let t = String(s);
+    if (doc.getTextWidth(t) <= px(maxW)) return t;
+    while (t.length > 1 && doc.getTextWidth(t + "…") > px(maxW)) t = t.slice(0, -1);
+    return t + "…";
+  };
+  const baseT = (top, lh, fs) => top + (lh - 1.107 * fs) / 2 + 0.891 * fs; // garis dasar teks Times dalam kotak baris
+  const midT = (cy, fs) => cy + fs * 0.33; // pusat visual teks campuran huruf
+  const L = 56, W = PAGE_W - 112;
+  const colW = [36, W - 344, 52, 52, 52, 56, 96];
+  const line = (x1, y1, x2, y2, w = 1) => {
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(px(w));
+    doc.line(px(x1), px(y1), px(x2), px(y2));
+  };
+
+  let start = 0;
+  pages.forEach((p, pi) => {
+    if (pi > 0) doc.addPage();
+    let y = 48;
+
+    if (pi === 0) {
+      const kop = drawKopPdf(doc, meta, logoL, logoR, L, W, y);
+      y += kop.h + 14;
+      txt("LAPORAN HASIL KOREKSI LEMBAR JAWABAN KOMPUTER", PAGE_W / 2, baseT(y, 18, 15), 15, { bold: true, align: "center" });
+      y += 20;
+      const sub = `${meta.examTitle || ""}${meta.tahunAjaran ? ` — Tahun Ajaran ${meta.tahunAjaran}` : ""}`;
+      txt(sub, PAGE_W / 2, baseT(y, 17, 13), 13, { align: "center" });
+      y += 17 + 12;
+      const X2 = L + 303;
+      [
+        [["Mata Pelajaran", meta.subject], ["Tanggal", fmtDate(meta.date)]],
+        [["Kelas", meta.className], ["Jumlah Soal", totalQ]],
+        [["Jumlah Siswa", stats.n], ["KKM", kkm]],
+      ].forEach((row, i) => {
+        const base = baseT(y + i * 20, 20, 12);
+        [L, X2].forEach((x, j) => {
+          const [k, v] = row[j];
+          txt(k, x, base, 12);
+          txt(":", x + 110, base, 12);
+          txt(v ?? "", x + 122, base, 12);
+        });
+      });
+      y += 60 + 12;
+    } else {
+      txt(fit(`${meta.schoolName} — Laporan Hasil Koreksi LJK ${meta.subject} ${meta.className} (lanjutan)`, 12, W), L, baseT(y, 18, 12), 12);
+      line(L, y + 24, L + W, y + 24);
+      y += 24 + 1 + 12;
+    }
+
+    if (p.rows.length > 0) {
+      const drawRow = (cells, h, opts) => {
+        let x = L;
+        cells.forEach((c, i) => {
+          if (opts.fill) {
+            doc.setFillColor(229, 231, 235);
+            doc.rect(px(x), px(y), px(colW[i]), px(h), "F");
+          }
+          doc.setDrawColor(0, 0, 0);
+          doc.setLineWidth(px(1));
+          doc.rect(px(x), px(y), px(colW[i]), px(h), "S");
+          const left = i === 1 && !opts.fill;
+          const bold = opts.fill || i === 5;
+          const t = fit(c, 12, colW[i] - 12, bold);
+          txt(t, left ? x + 6 : x + colW[i] / 2, midT(y + h / 2, 12), 12, { bold, align: left ? "left" : "center" });
+          x += colW[i];
+        });
+        y += h;
+      };
+      drawRow(["No", "Nama Siswa", "Benar", "Salah", "Kosong", "Nilai", "Keterangan"], 32, { fill: true });
+      p.rows.forEach((r, i) =>
+        drawRow([start + i + 1, r.name || "(tanpa nama)", r.correct, r.wrong, r.blank, r.score, r.score >= kkm ? "Tuntas" : "Belum tuntas"], 28, {})
+      );
+    }
+
+    if (p.footer) {
+      y += 24;
+      [
+        ["Rata-rata nilai", stats.avg],
+        ["Nilai tertinggi", stats.max],
+        ["Nilai terendah", stats.min],
+        ["Siswa tuntas", `${stats.pass} dari ${stats.n}`],
+      ].forEach(([k, v], i) => {
+        const base = baseT(y + i * 20, 20, 12);
+        txt(k, L, base, 12);
+        txt(":", L + 130, base, 12);
+        txt(v, L + 142, base, 12, { bold: true });
+      });
+      y += 80 + 28;
+      const sign = (cx, l1, l2, name, nip) => {
+        txt(l1, cx, baseT(y, 20, 13), 13, { align: "center" });
+        txt(l2, cx, baseT(y + 20, 20, 13), 13, { align: "center" });
+        const nameTop = y + 40 + 70;
+        const base = baseT(nameTop, 20, 13);
+        txt(name || "", cx, base, 13, { bold: true, align: "center" });
+        if (name) {
+          doc.setFont("times", "bold");
+          doc.setFontSize(px(13));
+          const w = doc.getTextWidth(String(name)) / S;
+          line(cx - w / 2, base + 1.5, cx + w / 2, base + 1.5, 1);
+        }
+        if (nip) txt(`NIP. ${nip}`, cx, baseT(nameTop + 20, 20, 13), 13, { align: "center" });
+      };
+      sign(L + 130, "Mengetahui,", "Kepala Sekolah", meta.principal, meta.principalNip);
+      sign(L + W - 130, `${meta.city}, ${fmtDate(meta.date)}`, "Guru Mata Pelajaran", meta.teacher, meta.teacherNip);
+    }
+
+    txt(`Halaman ${pi + 1} dari ${pages.length}`, PAGE_W / 2, PAGE_H - 28, 10, { align: "center", color: [107, 114, 128] });
+    start += p.rows.length;
+  });
   return doc;
 }
 
@@ -847,7 +970,6 @@ export default function App() {
 
   const filesRef = useRef(new Map());
   const runningRef = useRef(false);
-  const reportRef = useRef(null);
   const lastChecked = useRef("");
 
   const totalQ = settings.totalQ;
@@ -1006,12 +1128,13 @@ export default function App() {
   };
 
   const exportReport = async () => {
-    if (!sorted.length || !reportRef.current) return;
+    if (!sorted.length) return;
     setBusy("laporan");
     try {
-      await sleep(50);
-      const els = [...reportRef.current.querySelectorAll("[data-page]")];
-      await exportPagesToPdf(els, `Laporan-${slug(settings.subject)}-${slug(settings.className)}.pdf`);
+      await sleep(30);
+      buildReportPdf({ meta: settings, logoL, logoR, pages: reportPages, stats, kkm, totalQ }).save(
+        `Laporan-${slug(settings.subject)}-${slug(settings.className)}.pdf`
+      );
     } catch (e) {
       setNotice("Gagal membuat PDF: " + (e.message || e));
     } finally {
@@ -1569,10 +1692,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Salinan ukuran penuh untuk ditangkap html2canvas (tersembunyi di belakang halaman) */}
-      <div aria-hidden="true" style={{ position: "fixed", top: 0, left: 0, zIndex: -1, pointerEvents: "none" }}>
-        <div ref={reportRef}>{sorted.length > 0 && renderReport(false)}</div>
-      </div>
     </div>
   );
 }
