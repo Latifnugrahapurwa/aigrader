@@ -75,6 +75,15 @@ function normLetter(v) {
   return LETTERS.includes(c) ? c : "";
 }
 
+// Jawaban siswa: "" (kosong), satu huruf ("B"), atau gabungan huruf ("AC") bila ada lebih dari satu bulatan terisi.
+// Jawaban ganda melanggar aturan ujian, jadi tidak pernah sama dengan kunci dan selalu dihitung salah.
+function normMarks(v) {
+  const raw = Array.isArray(v) ? v.join("") : String(v ?? "");
+  const set = new Set(raw.toUpperCase().split("").filter((c) => LETTERS.includes(c)));
+  return LETTERS.filter((l) => set.has(l)).join("");
+}
+const isMulti = (a) => !!a && a.length > 1;
+
 function grade(student, key) {
   let correct = 0, wrong = 0, blank = 0, total = 0;
   key.forEach((k, i) => {
@@ -82,7 +91,7 @@ function grade(student, key) {
     total++;
     const a = student.answers[i + 1];
     if (!a) blank++;
-    else if (a === k) correct++;
+    else if (!isMulti(a) && a === k) correct++;
     else wrong++;
   });
   const score = total ? Math.round((correct / total) * 1000) / 10 : 0;
@@ -108,14 +117,16 @@ function paginate(rows) {
 
 function buildPrompt(n) {
   return (
-    `Analisis gambar LJK ini, deteksi nama siswa dan jawaban pilihan ganda nomor 1 sampai ${n}.\n` +
+    `Analisis gambar LJK ini, deteksi nama siswa dan semua bulatan yang terisi pada nomor 1 sampai ${n}.\n` +
     `Outputkan JSON murni:\n` +
-    `{\n"name": "NAMA SISWA",\n"answers": [\n{ "no": 1, "ans": "A" },\n{ "no": 2, "ans": "B" }\n]\n}\n\n` +
+    `{\n"name": "NAMA SISWA",\n"answers": [\n{ "no": 1, "marks": ["A"] },\n{ "no": 2, "marks": ["B", "D"] },\n{ "no": 3, "marks": [] }\n]\n}\n\n` +
     `Aturan:\n` +
     `- Nama siswa ditulis tangan pada baris "Nama" di kotak identitas (biasanya kanan atas). Abaikan teks cetak seperti nama sekolah.\n` +
-    `- Jawaban hanya huruf A, B, C, D, atau E.\n` +
-    `- Jawaban siswa bisa berupa tanda silang (X) atau bulatan yang dihitamkan (●).\n` +
-    `- Jika sebuah nomor kosong, tidak jelas, atau ditandai lebih dari satu pilihan, isi "ans" dengan "-".\n` +
+    `- "marks" berisi SEMUA huruf (A, B, C, D, E) yang ditandai pada nomor itu. Jangan memilih salah satu: ` +
+    `jika dua atau lebih pilihan ditandai, tulis semuanya, misalnya ["A", "C"].\n` +
+    `- Pilihan dianggap ditandai jika bulatannya dihitamkan (●) atau diberi tanda silang (X) dengan jelas. ` +
+    `Bulatan kosong yang hanya berisi huruf cetak tidak dihitung.\n` +
+    `- Jika sebuah nomor tidak ditandai sama sekali, isi "marks" dengan array kosong [].\n` +
     `- LJK berbentuk tabel dengan beberapa kotak; tiap kotak berisi 10 nomor berurutan ` +
     `(kotak 1 nomor 1–10, kotak 2 nomor 11–20, dan seterusnya). Baca kotak dari kiri ke kanan, lalu baris kotak berikutnya. ` +
     `Gunakan nomor yang tercetak di sebelah kiri setiap baris.\n` +
@@ -230,7 +241,7 @@ async function callGemini({ apiKey, model, base64, totalQ }) {
       const answers = {};
       (Array.isArray(obj.answers) ? obj.answers : []).forEach((a) => {
         const no = Number(a?.no);
-        if (no >= 1 && no <= totalQ) answers[no] = normLetter(a?.ans);
+        if (no >= 1 && no <= totalQ) answers[no] = normMarks(a?.marks ?? a?.ans);
       });
       return { name: String(obj.name || "").trim().toUpperCase(), answers };
     }
@@ -1469,12 +1480,12 @@ export default function App() {
                               <tr className="border-b border-slate-100 bg-slate-50">
                                 <td colSpan={8} className="p-3">
                                   <p className="mb-2 text-xs text-slate-500">
-                                    Periksa hasil bacaan AI dan ubah jika ada yang keliru. Hijau benar, merah salah, kuning kosong.
+                                    Periksa hasil bacaan AI dan ubah jika ada yang keliru. Hijau benar, merah salah (termasuk jawaban ganda: lebih dari satu pilihan pada satu nomor otomatis salah), kuning kosong.
                                   </p>
                                   <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-8 lg:grid-cols-10">
                                     {answerKey.map((k, idx) => {
                                       const a = r.answers[idx + 1] || "";
-                                      const tone = !k ? "border-slate-200 bg-white" : !a ? "border-amber-300 bg-amber-50" : a === k ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50";
+                                      const tone = !k ? "border-slate-200 bg-white" : !a ? "border-amber-300 bg-amber-50" : !isMulti(a) && a === k ? "border-emerald-300 bg-emerald-50" : "border-rose-300 bg-rose-50";
                                       return (
                                         <div key={idx} className={`flex items-center justify-between gap-1 rounded border px-1.5 py-1 ${tone}`}>
                                           <span className="text-xs font-semibold text-slate-600">{idx + 1}</span>
@@ -1484,6 +1495,7 @@ export default function App() {
                                             className="rounded bg-transparent text-sm font-medium focus:outline-none"
                                           >
                                             <option value="">–</option>
+                                            {isMulti(a) && <option value={a}>{a.split("").join("+")} (ganda)</option>}
                                             {LETTERS.map((l) => <option key={l} value={l}>{l}</option>)}
                                           </select>
                                         </div>
