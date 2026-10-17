@@ -520,7 +520,7 @@ const LJK = {
   HEAD_H: 24, NUMW: 32, FOOT_GAP: 6, FOOT_H: 22, GAP_X: 12, GAP_Y: 14,
 };
 const LJK_NOTE =
-  "Petunjuk: pilih satu jawaban untuk setiap nomor dengan menghitamkan bulatan (●) atau memberi tanda silang (X). " +
+  "Petunjuk: pilih satu jawaban untuk setiap nomor dengan menghitamkan bulatan atau memberi tanda silang (X). " +
   "Gunakan pensil 2B atau pulpen hitam, dan jangan melipat lembar ini.";
 // Pusat visual huruf kapital & angka Arial ≈ 0.358em di atas garis dasar.
 const midBase = (cy, size) => cy + size * 0.358;
@@ -597,7 +597,8 @@ function ljkGrid(totalQ) {
 
 function ljkIdPrims(schoolName) {
   const school = String(schoolName || "").toUpperCase();
-  const rows = [["No. Peserta", "", 1, 24], ["Nama", "", 25, 34], ["Sekolah", school, 59, 24]];
+  const rh = (LJK.H_ID - 2) / 3; // tiga baris dengan tinggi sama
+  const rows = [["No. Peserta", "", 1, rh], ["Nama", "", 1 + rh, rh], ["Sekolah", school, 1 + 2 * rh, rh]];
   const P = [
     { k: "rect", x: 1, y: 1, w: LJK.ID_W - 2, h: LJK.H_ID - 2, sw: 1.5 },
     { k: "line", x1: 106, y1: 1, x2: 106, y2: LJK.H_ID - 1, sw: 1.5 },
