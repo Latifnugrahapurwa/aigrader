@@ -19,6 +19,8 @@ import { jsPDF } from "jspdf";
 /* ───────────────────────── Konstanta & helper ───────────────────────── */
 
 const LETTERS = ["A", "B", "C", "D", "E"];
+// Jumlah pilihan per soal: 4 (A–D) atau 5 (A–E). Dipakai seragam di kunci, template, prompt AI, dan penilaian.
+const lettersFor = (n) => LETTERS.slice(0, n === 4 ? 4 : 5);
 const STORAGE_KEY = "ai-grader-sistem:v1";
 const PAGE_W = 794; // A4 @96dpi
 const PAGE_H = 1123;
@@ -48,6 +50,7 @@ const DEFAULT_SETTINGS = {
   principalNip: "",
   kkm: 75,
   totalQ: 40,
+  choices: 5,
 };
 
 const uid = () => Math.random().toString(36).slice(2, 10);
@@ -69,17 +72,18 @@ function loadSaved() {
   }
 }
 
-function normLetter(v) {
+function normLetter(v, choices = 5) {
   const c = String(v ?? "").trim().toUpperCase().charAt(0);
-  return LETTERS.includes(c) ? c : "";
+  return lettersFor(choices).includes(c) ? c : "";
 }
 
 // Jawaban siswa: "" (kosong), satu huruf ("B"), atau gabungan huruf ("AC") bila ada lebih dari satu bulatan terisi.
 // Jawaban ganda melanggar aturan ujian, jadi tidak pernah sama dengan kunci dan selalu dihitung salah.
-function normMarks(v) {
+function normMarks(v, choices = 5) {
+  const valid = lettersFor(choices);
   const raw = Array.isArray(v) ? v.join("") : String(v ?? "");
-  const set = new Set(raw.toUpperCase().split("").filter((c) => LETTERS.includes(c)));
-  return LETTERS.filter((l) => set.has(l)).join("");
+  const set = new Set(raw.toUpperCase().split("").filter((c) => valid.includes(c)));
+  return valid.filter((l) => set.has(l)).join("");
 }
 const isMulti = (a) => !!a && a.length > 1;
 
@@ -114,14 +118,18 @@ function paginate(rows) {
 
 /* ───────────────────────── Gemini Vision ───────────────────────── */
 
-function buildPrompt(n) {
+function buildPrompt(n, choices = 5) {
+  const ls = lettersFor(choices);
+  const range = `${ls[0]}–${ls[ls.length - 1]}`;
+  const list = ls.join(", ");
   return (
     `Analisis gambar LJK ini, deteksi nama siswa dan semua bulatan yang terisi pada nomor 1 sampai ${n}.\n` +
     `Outputkan JSON murni:\n` +
     `{\n"name": "NAMA SISWA",\n"answers": [\n{ "no": 1, "marks": ["A"] },\n{ "no": 2, "marks": ["B", "D"] },\n{ "no": 3, "marks": [] }\n]\n}\n\n` +
     `Aturan:\n` +
     `- Nama siswa ditulis tangan pada baris "Nama" di kotak identitas (biasanya kanan atas). Abaikan teks cetak seperti nama sekolah.\n` +
-    `- "marks" berisi SEMUA huruf (A, B, C, D, E) yang ditandai pada nomor itu. Jangan memilih salah satu: ` +
+    `- Setiap nomor hanya memiliki ${ls.length} pilihan: ${list}` + (ls.length === 4 ? " (tidak ada pilihan E)" : "") + `.\n` +
+    `- "marks" berisi SEMUA huruf (${list}) yang ditandai pada nomor itu. Jangan memilih salah satu: ` +
     `jika dua atau lebih pilihan ditandai, tulis semuanya, misalnya ["A", "C"].\n` +
     `- Pilihan dianggap ditandai jika bulatannya dihitamkan (●) atau diberi tanda silang (X) dengan jelas. ` +
     `Bulatan kosong yang hanya berisi huruf cetak tidak dihitung.\n` +
@@ -129,7 +137,7 @@ function buildPrompt(n) {
     `- LJK berbentuk tabel dengan beberapa kotak; tiap kotak berisi 10 nomor berurutan ` +
     `(kotak 1 nomor 1–10, kotak 2 nomor 11–20, dan seterusnya). Baca kotak dari kiri ke kanan, lalu baris kotak berikutnya. ` +
     `Gunakan nomor yang tercetak di sebelah kiri setiap baris.\n` +
-    `- Abaikan deretan huruf A B C D E di bawah tiap kotak; itu hanya penanda, bukan soal.\n` +
+    `- Abaikan deretan huruf ${ls.join(" ")} di bawah tiap kotak; itu hanya penanda, bukan soal.\n` +
     `- Sertakan semua nomor dari 1 sampai ${n}.\n` +
     `- Balas hanya dengan JSON, tanpa penjelasan dan tanpa tanda markdown.`
   );
@@ -213,10 +221,10 @@ async function listModels(apiKey) {
   return out.filter((m) => /^gemini-/.test(m.id) && !/(tts|image|embedding|live|audio|robotics|computer-use|learnlm)/.test(m.id));
 }
 
-async function callGemini({ apiKey, model, base64, totalQ }) {
+async function callGemini({ apiKey, model, base64, totalQ, choices = 5 }) {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model.trim())}:generateContent`;
   const body = JSON.stringify({
-    contents: [{ parts: [{ text: buildPrompt(totalQ) }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }],
+    contents: [{ parts: [{ text: buildPrompt(totalQ, choices) }, { inlineData: { mimeType: "image/jpeg", data: base64 } }] }],
     // Gemini 3+ disarankan memakai temperature bawaan; model lama dipaksa 0 agar hasil konsisten
     generationConfig: { ...(versionOf(model.trim()) < 3 ? { temperature: 0 } : {}), responseMimeType: "application/json" },
   });
@@ -240,7 +248,7 @@ async function callGemini({ apiKey, model, base64, totalQ }) {
       const answers = {};
       (Array.isArray(obj.answers) ? obj.answers : []).forEach((a) => {
         const no = Number(a?.no);
-        if (no >= 1 && no <= totalQ) answers[no] = normMarks(a?.marks ?? a?.ans);
+        if (no >= 1 && no <= totalQ) answers[no] = normMarks(a?.marks ?? a?.ans, choices);
       });
       return { name: String(obj.name || "").trim().toUpperCase(), answers };
     }
@@ -525,14 +533,16 @@ function ljkGridAvail() {
 
 // Kotak pilihan ganda berbentuk tabel: tiap blok 10 nomor, baris judul A–E, garis sel, bulatan berhuruf,
 // dan deretan kotak A–E terpisah di bawah blok (seperti box_pilihan.png).
-function ljkGrid(totalQ) {
+function ljkGrid(totalQ, choicesIn = 5) {
+  const letters = lettersFor(choicesIn);
+  const NC = letters.length;
   const { PER_BLOCK, MAX_PER_ROW, HEAD_H, NUMW, FOOT_GAP, FOOT_H, GAP_X, GAP_Y, PAD_X } = LJK;
   const M = 1; // ruang untuk setengah tebal garis tepi
   const GW = PAGE_W - 2 * PAD_X;
   const nBlocks = Math.ceil(totalQ / PER_BLOCK);
   const nBands = Math.ceil(nBlocks / MAX_PER_ROW);
   const blockW = (GW - 2 * M - (MAX_PER_ROW - 1) * GAP_X) / MAX_PER_ROW;
-  const cellW = (blockW - NUMW) / 5;
+  const cellW = (blockW - NUMW) / NC;
   const overhead = HEAD_H + FOOT_GAP + FOOT_H;
   const rowH = Math.max(15, Math.min(44, Math.floor((ljkGridAvail() - 2 * M - nBands * overhead - (nBands - 1) * GAP_Y) / (nBands * PER_BLOCK))));
   const b = Math.max(10, Math.min(24, Math.round(cellW - 6), rowH - 8)); // diameter bulatan
@@ -556,19 +566,19 @@ function ljkGrid(totalQ) {
 
     // garis sel (tipis)
     for (let r = 0; r < rows; r++) line(x, y + HEAD_H + r * rowH, x + blockW, y + HEAD_H + r * rowH, THIN);
-    for (let i = 0; i < 5; i++) line(x + NUMW + i * cellW, y, x + NUMW + i * cellW, y + bh, THIN);
+    for (let i = 0; i < NC; i++) line(x + NUMW + i * cellW, y, x + NUMW + i * cellW, y + bh, THIN);
     // bingkai luar (tebal)
     P.push({ k: "rect", x, y, w: blockW, h: bh, sw: THICK });
 
     // judul A–E
-    LETTERS.forEach((l, i) => text(x + NUMW + (i + 0.5) * cellW, midBase(y + HEAD_H / 2, 12), l, 12, true, "middle"));
+    letters.forEach((l, i) => text(x + NUMW + (i + 0.5) * cellW, midBase(y + HEAD_H / 2, 12), l, 12, true, "middle"));
 
     // baris soal
     for (let r = 0; r < rows; r++) {
       const n = start + r + 1;
       const cy = y + HEAD_H + r * rowH + rowH / 2;
       text(x + NUMW - 6, midBase(cy, 12.5), `${n}.`, 12.5, true, "end");
-      LETTERS.forEach((l, i) => {
+      letters.forEach((l, i) => {
         const cx = x + NUMW + (i + 0.5) * cellW;
         P.push({ k: "circle", cx, cy, r: (b - 1.4) / 2, sw: 1.4 });
         text(cx, midBase(cy, fs), l, fs, false, "middle", "#6b7280");
@@ -577,7 +587,7 @@ function ljkGrid(totalQ) {
 
     // deretan kotak A–E terpisah di bawah blok
     const fy = y + bh + FOOT_GAP;
-    LETTERS.forEach((l, i) => {
+    letters.forEach((l, i) => {
       const fx = x + NUMW + i * cellW;
       P.push({ k: "rect", x: fx, y: fy, w: cellW, h: FOOT_H, sw: 1.2 });
       text(fx + cellW / 2, midBase(fy + FOOT_H / 2, 12), l, 12, true, "middle");
@@ -625,7 +635,7 @@ function SvgPrims({ prims }) {
 function LjkTemplate({ meta, totalQ, logoL, logoR }) {
   const FONT = "Arial, Helvetica, sans-serif";
   const { PAD_T, PAD_BOT, PAD_X, H_ID, H_KOP, H_TITLE, H_INFO, H_NOTE, ID_W } = LJK;
-  const grid = ljkGrid(totalQ);
+  const grid = ljkGrid(totalQ, meta.choices);
   const corner = (pos) => <div style={{ position: "absolute", width: 18, height: 18, background: "#000000", ...pos }} />;
 
   return (
@@ -751,7 +761,7 @@ function buildLjkPdf({ meta, totalQ, logoL, logoR }) {
   doc.splitTextToSize(LJK_NOTE, px(PAGE_W - 2 * PAD_X)).forEach((ln, i) => put(ln, PAD_X, lineBase(noteTop + i * 15, 15, 10.5), 10.5));
 
   // kotak pilihan ganda
-  drawPrims(ljkGrid(totalQ).prims, PAD_X, noteTop + H_NOTE + 8);
+  drawPrims(ljkGrid(totalQ, meta.choices).prims, PAD_X, noteTop + H_NOTE + 8);
   return doc;
 }
 
@@ -950,7 +960,7 @@ export default function App() {
   });
   const [answerKey, setAnswerKey] = useState(() => {
     const n = saved?.settings?.totalQ || DEFAULT_SETTINGS.totalQ;
-    return Array.from({ length: n }, (_, i) => normLetter(saved?.answerKey?.[i]));
+    return Array.from({ length: n }, (_, i) => normLetter(saved?.answerKey?.[i], saved?.settings?.choices));
   });
   const [logoL, setLogoL] = useState(saved?.logoL || null);
   const [logoR, setLogoR] = useState(saved?.logoR || null);
@@ -973,6 +983,8 @@ export default function App() {
   const lastChecked = useRef("");
 
   const totalQ = settings.totalQ;
+  const choices = settings.choices === 4 ? 4 : 5;
+  const letters = lettersFor(choices);
   const kkm = Number(settings.kkm) || 0;
   const set = (k, v) => setSettings((p) => ({ ...p, [k]: v }));
 
@@ -1024,12 +1036,24 @@ export default function App() {
     setQInput(String(n));
   };
   const setKeyAt = (i, letter) => setAnswerKey((p) => p.map((k, idx) => (idx === i ? (k === letter ? "" : letter) : k)));
+  const changeChoices = (n) => {
+    if (n === choices) return;
+    const valid = lettersFor(n);
+    const cleared = answerKey.filter((k) => k && !valid.includes(k)).length;
+    set("choices", n);
+    setAnswerKey((p) => p.map((k) => (valid.includes(k) ? k : "")));
+    if (cleared) setNotice(`${cleared} kunci dengan huruf di luar ${valid[0]}–${valid[valid.length - 1]} dikosongkan. Isi ulang kunci tersebut.`);
+  };
   const applyBulk = () => {
-    const letters = bulk.toUpperCase().replace(/[^A-E]/g, "").split("").slice(0, 100);
-    if (!letters.length) return setNotice("Tidak ada huruf A–E yang terbaca. Contoh: ABCDEABCDE");
-    set("totalQ", letters.length);
-    setQInput(String(letters.length));
-    setAnswerKey(letters);
+    const cleaned = bulk.toUpperCase().replace(/[^A-E]/g, "");
+    const range = `${letters[0]}–${letters[letters.length - 1]}`;
+    if (!cleaned) return setNotice(`Tidak ada huruf ${range} yang terbaca. Contoh: ${letters.join("")}${letters.join("")}`);
+    if (cleaned.split("").some((c) => !letters.includes(c)))
+      return setNotice(`Kunci memuat huruf di luar ${range}, padahal mode soal ${choices} pilihan. Ubah jumlah pilihan jawaban atau perbaiki kunci.`);
+    const arr = cleaned.split("").slice(0, 100);
+    set("totalQ", arr.length);
+    setQInput(String(arr.length));
+    setAnswerKey(arr);
     setBulk("");
   };
   const keyFilled = answerKey.filter(Boolean).length;
@@ -1078,7 +1102,7 @@ export default function App() {
       update(id, { status: "memproses", error: "" });
       try {
         const base64 = await prepareImage(filesRef.current.get(id));
-        const result = await callGemini({ apiKey: settings.apiKey, model: settings.model, base64, totalQ });
+        const result = await callGemini({ apiKey: settings.apiKey, model: settings.model, base64, totalQ, choices });
         update(id, { status: "selesai", name: result.name, answers: result.answers });
       } catch (e) {
         update(id, { status: "gagal", error: e.message || "Terjadi kesalahan." });
@@ -1090,8 +1114,15 @@ export default function App() {
 
   /* ── hasil ── */
   const graded = useMemo(
-    () => students.filter((s) => s.status === "selesai").map((s) => ({ ...s, ...grade(s, answerKey) })),
-    [students, answerKey]
+    () =>
+      students
+        .filter((s) => s.status === "selesai")
+        .map((s) => {
+          // huruf di luar mode pilihan saat ini dibuang agar penilaian dan editor tetap sinkron
+          const answers = Object.fromEntries(Object.entries(s.answers).map(([no, a]) => [no, normMarks(a, choices)]));
+          return { ...s, answers, ...grade({ ...s, answers }, answerKey) };
+        }),
+    [students, answerKey, choices]
   );
   const sorted = useMemo(() => {
     const a = [...graded];
@@ -1413,10 +1444,24 @@ export default function App() {
                     onBlur={() => setQInput(String(totalQ))}
                   />
                 </Field>
-                <Field label="Tempel kunci sekaligus" hint="Contoh: ABCDEABCDE. Jumlah soal mengikuti panjang kunci.">
+                <Field label="Tempel kunci sekaligus" hint={`Contoh: ${letters.join("")}${letters.join("")}. Jumlah soal mengikuti panjang kunci.`}>
                   <div className="flex gap-2">
-                    <input value={bulk} onChange={(e) => setBulk(e.target.value)} className={inputCls} placeholder="ABCDE…" />
+                    <input value={bulk} onChange={(e) => setBulk(e.target.value)} className={inputCls} placeholder={`${letters.join("")}…`} />
                     <button type="button" onClick={applyBulk} className={btnGhost}>Terapkan</button>
+                  </div>
+                </Field>
+                <Field label="Jumlah pilihan jawaban" hint="Samakan dengan soal ujian. Berlaku untuk kunci, template LJK, dan pembacaan AI.">
+                  <div className="flex gap-2">
+                    {[4, 5].map((n) => (
+                      <button
+                        key={n} type="button" onClick={() => changeChoices(n)} aria-pressed={choices === n}
+                        className={`flex-1 rounded-lg border px-3 py-2 text-sm font-medium focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                          choices === n ? "border-indigo-600 bg-indigo-600 text-white" : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        {n} pilihan (A–{lettersFor(n)[n - 1]})
+                      </button>
+                    ))}
                   </div>
                 </Field>
               </div>
@@ -1434,7 +1479,7 @@ export default function App() {
                   <div key={i} className="flex items-center gap-2 py-1">
                     <span className="w-8 text-right text-sm font-semibold text-slate-600">{i + 1}</span>
                     <div className="flex gap-1">
-                      {LETTERS.map((l) => (
+                      {letters.map((l) => (
                         <button
                           key={l} type="button" onClick={() => setKeyAt(i, l)} aria-pressed={k === l}
                           aria-label={`Soal ${i + 1} jawaban ${l}`}
@@ -1619,7 +1664,7 @@ export default function App() {
                                           >
                                             <option value="">–</option>
                                             {isMulti(a) && <option value={a}>{a.split("").join("+")} (ganda)</option>}
-                                            {LETTERS.map((l) => <option key={l} value={l}>{l}</option>)}
+                                            {letters.map((l) => <option key={l} value={l}>{l}</option>)}
                                           </select>
                                         </div>
                                       );
@@ -1680,7 +1725,7 @@ export default function App() {
             }
           >
             <p className="mb-4 text-sm text-slate-600">
-              Lembar A4 dengan {totalQ} nomor (A–E) dalam kotak tabel berisi 10 soal per blok. Jumlah soal, kop, logo, judul, mata pelajaran, dan kelas
+              Lembar A4 dengan {totalQ} nomor ({choices} pilihan, A–{letters[letters.length - 1]}) dalam kotak tabel berisi 10 soal per blok. Jumlah soal, kop, logo, judul, mata pelajaran, dan kelas
               mengikuti isian di tab Kunci Jawaban dan Pengaturan. Cetak dengan skala 100% agar hasil foto mudah dibaca AI.
             </p>
             <div className="mx-auto max-w-md">
