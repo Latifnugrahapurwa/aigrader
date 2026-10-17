@@ -38,6 +38,7 @@ const DEFAULT_SETTINGS = {
   schoolName: "SMA Negeri 1 Contoh",
   address: "Jl. Pendidikan No. 1, Kota Contoh",
   examTitle: "Penilaian Tengah Semester",
+  tahunAjaran: "2026/2027",
   subject: "Matematika",
   className: "X-1",
   date: today(),
@@ -112,6 +113,7 @@ function buildPrompt(n) {
     `Outputkan JSON murni:\n` +
     `{\n"name": "NAMA SISWA",\n"answers": [\n{ "no": 1, "ans": "A" },\n{ "no": 2, "ans": "B" }\n]\n}\n\n` +
     `Aturan:\n` +
+    `- Nama siswa ditulis tangan pada baris "Nama" di kotak identitas (biasanya kanan atas). Abaikan teks cetak seperti nama sekolah.\n` +
     `- Jawaban hanya huruf A, B, C, D, atau E.\n` +
     `- Jawaban siswa bisa berupa tanda silang (X) atau bulatan yang dihitamkan (●).\n` +
     `- Jika sebuah nomor kosong, tidak jelas, atau ditandai lebih dari satu pilihan, isi "ans" dengan "-".\n` +
@@ -352,10 +354,52 @@ function ScaledPage({ children }) {
 
 /* ───────────────────────── Halaman laporan (inline style, hex) ───────────────────────── */
 
+function fitBox(logo, box) {
+  if (!logo) return null;
+  const s = Math.min(box / logo.w, box / logo.h);
+  return { w: Math.max(1, Math.round(logo.w * s)), h: Math.max(1, Math.round(logo.h * s)) };
+}
+
+// Kop surat: logo kiri, teks tengah, logo kanan, garis tebal-tipis. Dipakai di LJK dan laporan.
+function Kop({ meta, logoL, logoR }) {
+  const BOX = 80;
+  const lines = String(meta.instansi || "").split("\n").map((s) => s.trim()).filter(Boolean);
+  const logoBox = (l) => {
+    const f = fitBox(l, BOX);
+    return (
+      <div style={{ width: BOX, height: BOX, flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        {f && <img src={l.src} alt="" style={{ width: f.w, height: f.h, display: "block" }} />}
+      </div>
+    );
+  };
+  const big = { fontSize: 15, fontWeight: 700, fontFamily: "Arial, Helvetica, sans-serif", lineHeight: 1.3 };
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        {logoBox(logoL)}
+        <div style={{ flex: 1, textAlign: "center" }}>
+          {lines.map((t, i) => (
+            <div key={i} style={big}>{t.toUpperCase()}</div>
+          ))}
+          <div style={big}>{String(meta.schoolName || "").toUpperCase()}</div>
+          {meta.address && (
+            <div style={{ fontSize: 11, fontStyle: "italic", fontFamily: '"Times New Roman", Times, serif', lineHeight: 1.3 }}>
+              {meta.address}
+            </div>
+          )}
+        </div>
+        {logoBox(logoR)}
+      </div>
+      <div style={{ marginTop: 6, borderTop: "3px solid #000000" }} />
+      <div style={{ marginTop: 2, borderTop: "1px solid #000000" }} />
+    </div>
+  );
+}
+
 const th = { border: "1px solid #000000", padding: "4px 6px", background: "#e5e7eb", fontSize: 12, textAlign: "center", fontWeight: 700 };
 const td = { border: "1px solid #000000", padding: "0 6px", fontSize: 12, height: 28, boxSizing: "border-box", textAlign: "center", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" };
 
-function ReportPage({ meta, logo, rows, startIndex, pageNo, pageCount, first, footer, stats, kkm, totalQ }) {
+function ReportPage({ meta, logoL, logoR, rows, startIndex, pageNo, pageCount, first, footer, stats, kkm, totalQ }) {
   return (
     <div
       data-page
@@ -366,17 +410,11 @@ function ReportPage({ meta, logo, rows, startIndex, pageNo, pageCount, first, fo
     >
       {first ? (
         <>
-          <div style={{ display: "flex", alignItems: "center", gap: 16, borderBottom: "3px double #000000", paddingBottom: 10, marginBottom: 16 }}>
-            {logo ? <img src={logo} alt="" style={{ width: 72, height: 72, objectFit: "contain" }} /> : <div style={{ width: 72 }} />}
-            <div style={{ flex: 1, textAlign: "center", lineHeight: 1.3 }}>
-              {meta.instansi && <div style={{ fontSize: 13, fontWeight: 700 }}>{meta.instansi.toUpperCase()}</div>}
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{meta.schoolName.toUpperCase()}</div>
-              <div style={{ fontSize: 11 }}>{meta.address}</div>
-            </div>
-            <div style={{ width: 72 }} />
+          <div style={{ marginBottom: 14 }}>
+            <Kop meta={meta} logoL={logoL} logoR={logoR} />
           </div>
           <div style={{ textAlign: "center", fontWeight: 700, fontSize: 15, marginBottom: 2 }}>LAPORAN HASIL KOREKSI LEMBAR JAWABAN KOMPUTER</div>
-          <div style={{ textAlign: "center", fontSize: 13, marginBottom: 12 }}>{meta.examTitle}</div>
+          <div style={{ textAlign: "center", fontSize: 13, marginBottom: 12 }}>{meta.examTitle}{meta.tahunAjaran ? ` — Tahun Ajaran ${meta.tahunAjaran}` : ""}</div>
           <table style={{ fontSize: 12, marginBottom: 12, width: "100%", borderCollapse: "collapse" }}>
             <tbody>
               <tr>
@@ -472,20 +510,70 @@ function ReportPage({ meta, logo, rows, startIndex, pageNo, pageCount, first, fo
 
 /* ───────────────────────── Template LJK 3 kolom (inline style, hex) ───────────────────────── */
 
-function LjkTemplate({ meta, totalQ }) {
+function LjkTemplate({ meta, totalQ, logoL, logoR }) {
+  const FONT = "Arial, Helvetica, sans-serif";
   const rows = Math.ceil(totalQ / 3);
-  const rowH = Math.max(18, Math.min(30, Math.floor(690 / rows)));
-  const b = Math.min(22, rowH - 6);
-  const cols = [0, 1, 2].map((c) => Array.from({ length: rows }, (_, r) => c * rows + r + 1).filter((n) => n <= totalQ));
-  const corner = (pos) => (
-    <div style={{ position: "absolute", width: 18, height: 18, background: "#000000", ...pos }} />
-  );
+  const rowH = Math.max(16, Math.min(30, Math.floor(620 / rows)));
+  const b = Math.max(12, Math.min(22, rowH - 6)); // diameter bulatan
+  const GAP = 8, NUMW = 30, HEAD_H = 24, PAD_B = 8, COLGAP = 15;
+  const GW = PAGE_W - 80;
+  const COLW = (GW - 2 * COLGAP) / 3;
+  const contentW = NUMW + 5 * b + 4 * GAP;
+  const boxH = HEAD_H + rows * rowH + PAD_B;
+  const fs = Math.round(b * 0.5 * 10) / 10;
+  // Huruf kapital & angka Arial: tinggi ≈ 0.716em, jadi pusat visualnya ≈ 0.358em di atas garis dasar.
+  // Posisi y dihitung manual (bukan dominant-baseline) supaya sama persis di browser dan di hasil PDF.
+  const dy = (size) => size * 0.358;
+  const corner = (pos) => <div style={{ position: "absolute", width: 18, height: 18, background: "#000000", ...pos }} />;
+
+  const columns = [0, 1, 2].map((c) => {
+    const x = c * (COLW + COLGAP);
+    const x0 = x + (COLW - contentW) / 2;
+    const cx = (i) => x0 + NUMW + b / 2 + i * (b + GAP);
+    const items = [];
+    items.push(
+      <rect key="box" x={x + 0.75} y={0.75} width={COLW - 1.5} height={boxH - 1.5} rx={4} fill="none" stroke="#000000" strokeWidth="1.5" />
+    );
+    LETTERS.forEach((l, i) =>
+      items.push(
+        <text key={`h${l}`} x={cx(i)} y={HEAD_H / 2 + dy(11)} textAnchor="middle" fontFamily={FONT} fontSize="11" fontWeight="700" fill="#000000">
+          {l}
+        </text>
+      )
+    );
+    for (let r = 0; r < rows; r++) {
+      const n = c * rows + r + 1;
+      if (n > totalQ) break;
+      const cy = HEAD_H + r * rowH + rowH / 2;
+      items.push(
+        <text key={`n${n}`} x={x0 + NUMW - 8} y={cy + dy(12)} textAnchor="end" fontFamily={FONT} fontSize="12" fontWeight="700" fill="#000000">
+          {n}
+        </text>
+      );
+      LETTERS.forEach((l, i) => {
+        items.push(<circle key={`c${n}${l}`} cx={cx(i)} cy={cy} r={(b - 1.5) / 2} fill="none" stroke="#000000" strokeWidth="1.5" />);
+        items.push(
+          <text key={`t${n}${l}`} x={cx(i)} y={cy + dy(fs)} textAnchor="middle" fontFamily={FONT} fontSize={fs} fill="#6b7280">
+            {l}
+          </text>
+        );
+      });
+    }
+    return <g key={c}>{items}</g>;
+  });
+
+  const idRows = [
+    ["No. Peserta", "", 24],
+    ["Nama", "", 34],
+    ["Sekolah", String(meta.schoolName || "").toUpperCase(), 24],
+  ];
+
   return (
     <div
       data-page
       style={{
         width: PAGE_W, height: PAGE_H, boxSizing: "border-box", padding: "44px 40px", background: "#ffffff",
-        color: "#000000", fontFamily: "Arial, Helvetica, sans-serif", position: "relative", overflow: "hidden",
+        color: "#000000", fontFamily: FONT, position: "relative", overflow: "hidden",
       }}
     >
       {corner({ top: 16, left: 16 })}
@@ -493,65 +581,52 @@ function LjkTemplate({ meta, totalQ }) {
       {corner({ bottom: 16, left: 16 })}
       {corner({ bottom: 16, right: 16 })}
 
-      <div style={{ textAlign: "center", lineHeight: 1.35 }}>
-        <div style={{ fontSize: 13, fontWeight: 700 }}>{meta.schoolName.toUpperCase()}</div>
-        <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: 1 }}>LEMBAR JAWABAN KOMPUTER</div>
-        <div style={{ fontSize: 12 }}>{meta.examTitle}</div>
+      {/* Kotak identitas siswa (kanan atas) */}
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <table style={{ borderCollapse: "collapse", width: 368, fontSize: 13 }}>
+          <tbody>
+            {idRows.map(([k, v, h]) => (
+              <tr key={k} style={{ height: h }}>
+                <td style={{ border: "1px solid #000000", width: 105, height: h, padding: "0 8px", fontWeight: 700, boxSizing: "border-box" }}>{k}</td>
+                <td style={{ border: "1px solid #000000", height: h, padding: "0 8px", fontSize: 12, boxSizing: "border-box" }}>{v}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
-      <div style={{ border: "2px solid #000000", marginTop: 14 }}>
-        <div style={{ padding: "6px 10px", borderBottom: "1px solid #000000" }}>
-          <div style={{ fontSize: 10 }}>NAMA LENGKAP (tulis dengan huruf kapital yang jelas)</div>
-          <div style={{ height: 38 }} />
-        </div>
-        <div style={{ display: "flex" }}>
-          {[["KELAS", ""], ["NO. ABSEN", ""], ["MATA PELAJARAN", meta.subject], ["TANGGAL", ""]].map(([k, v], i) => (
-            <div key={k} style={{ flex: k === "MATA PELAJARAN" ? 2 : 1, padding: "5px 10px", borderLeft: i ? "1px solid #000000" : "none" }}>
-              <div style={{ fontSize: 10 }}>{k}</div>
-              <div style={{ height: 22, fontSize: 13, fontWeight: 700 }}>{v}</div>
-            </div>
+      <div style={{ marginTop: 10 }}>
+        <Kop meta={meta} logoL={logoL} logoR={logoR} />
+      </div>
+
+      {/* Judul */}
+      <div style={{ textAlign: "center", marginTop: 10, lineHeight: 1.3 }}>
+        <div style={{ fontSize: 22, fontWeight: 700 }}>LEMBAR JAWAB</div>
+        {meta.examTitle && <div style={{ fontSize: 14, fontWeight: 700 }}>{String(meta.examTitle).toUpperCase()}</div>}
+        {meta.tahunAjaran && <div style={{ fontSize: 13 }}>TAHUN AJARAN {meta.tahunAjaran}</div>}
+      </div>
+
+      {/* Mata pelajaran & kelas */}
+      <table style={{ marginTop: 10, marginLeft: 140, fontSize: 13, borderCollapse: "collapse" }}>
+        <tbody>
+          {[["Mata Pelajaran", meta.subject], ["Kelas", meta.className]].map(([k, v]) => (
+            <tr key={k} style={{ height: 22 }}>
+              <td style={{ width: 120, fontWeight: 700 }}>{k}</td>
+              <td style={{ width: 16, fontWeight: 700 }}>:</td>
+              <td>{v}</td>
+            </tr>
           ))}
-        </div>
-      </div>
+        </tbody>
+      </table>
 
-      <div style={{ fontSize: 10.5, margin: "10px 0 10px", lineHeight: 1.4 }}>
+      <div style={{ fontSize: 10.5, margin: "8px 0", lineHeight: 1.4 }}>
         Petunjuk: pilih satu jawaban untuk setiap nomor dengan menghitamkan bulatan (●) atau memberi tanda silang (X).
         Gunakan pensil 2B atau pulpen hitam, dan jangan melipat lembar ini.
       </div>
 
-      <div style={{ display: "flex", gap: 14 }}>
-        {cols.map((nums, ci) => (
-          <div key={ci} style={{ flex: 1, border: "1.5px solid #000000", borderRadius: 4, padding: "6px 0" }}>
-            <div style={{ display: "flex", justifyContent: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", height: 20 }}>
-                <div style={{ width: 30 }} />
-                {LETTERS.map((l) => (
-                  <div key={l} style={{ width: b, marginRight: 8, textAlign: "center", fontSize: 11, fontWeight: 700 }}>{l}</div>
-                ))}
-              </div>
-            </div>
-            {nums.map((n) => (
-              <div key={n} style={{ display: "flex", justifyContent: "center" }}>
-                <div style={{ display: "flex", alignItems: "center", height: rowH }}>
-                  <div style={{ width: 30, textAlign: "right", paddingRight: 8, boxSizing: "border-box", fontSize: 12, fontWeight: 700 }}>{n}</div>
-                  {LETTERS.map((l) => (
-                    <div
-                      key={l}
-                      style={{
-                        width: b, height: b, borderRadius: "50%", border: "1.5px solid #000000", marginRight: 8,
-                        boxSizing: "border-box", fontSize: Math.round(b * 0.5), color: "#6b7280",
-                        display: "flex", alignItems: "center", justifyContent: "center",
-                      }}
-                    >
-                      {l}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
+      <svg width={GW} height={boxH} viewBox={`0 0 ${GW} ${boxH}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
+        {columns}
+      </svg>
     </div>
   );
 }
@@ -577,7 +652,8 @@ export default function App() {
     const n = saved?.settings?.totalQ || DEFAULT_SETTINGS.totalQ;
     return Array.from({ length: n }, (_, i) => normLetter(saved?.answerKey?.[i]));
   });
-  const [logo, setLogo] = useState("");
+  const [logoL, setLogoL] = useState(saved?.logoL || null);
+  const [logoR, setLogoR] = useState(saved?.logoR || null);
   const [tab, setTab] = useState("pengaturan");
   const [showKey, setShowKey] = useState(false);
   const [students, setStudents] = useState([]);
@@ -635,12 +711,12 @@ export default function App() {
     try {
       localStorage.setItem(
         STORAGE_KEY,
-        JSON.stringify({ settings: settings.remember ? settings : { ...settings, apiKey: "" }, answerKey })
+        JSON.stringify({ settings: settings.remember ? settings : { ...settings, apiKey: "" }, answerKey, logoL, logoR })
       );
     } catch {
       /* penyimpanan lokal tidak tersedia */
     }
-  }, [settings, answerKey]);
+  }, [settings, answerKey, logoL, logoR]);
 
   /* ── kunci jawaban ── */
   const changeTotal = (v) => {
@@ -744,7 +820,7 @@ export default function App() {
     return reportPages.map((p, i) => {
       const el = (
         <ReportPage
-          key={i} meta={settings} logo={logo} rows={p.rows} startIndex={start} pageNo={i + 1}
+          key={i} meta={settings} logoL={logoL} logoR={logoR} rows={p.rows} startIndex={start} pageNo={i + 1}
           pageCount={reportPages.length} first={i === 0} footer={p.footer} stats={stats} kkm={kkm} totalQ={totalQ}
         />
       );
@@ -802,10 +878,26 @@ export default function App() {
     }
   };
 
-  const onLogo = (file) => {
+  const onLogo = (side, file) => {
     if (!file) return;
+    const setter = side === "L" ? setLogoL : setLogoR;
     const r = new FileReader();
-    r.onload = () => setLogo(String(r.result));
+    r.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const nw = img.naturalWidth || 300;
+        const nh = img.naturalHeight || 300;
+        const sc = Math.min(1, 300 / Math.max(nw, nh));
+        const w = Math.max(1, Math.round(nw * sc));
+        const h = Math.max(1, Math.round(nh * sc));
+        const c = document.createElement("canvas");
+        c.width = w;
+        c.height = h;
+        c.getContext("2d").drawImage(img, 0, 0, w, h);
+        setter({ src: c.toDataURL("image/png"), w, h });
+      };
+      img.src = String(r.result);
+    };
     r.readAsDataURL(file);
   };
 
@@ -937,9 +1029,11 @@ export default function App() {
 
             <Card title="Identitas sekolah & ujian" icon={GraduationCap}>
               <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Instansi (opsional)" hint="Baris kop paling atas, mis. nama dinas pendidikan.">
-                  <input value={settings.instansi} onChange={(e) => set("instansi", e.target.value)} className={inputCls} />
-                </Field>
+                <div className="sm:col-span-2">
+                  <Field label="Instansi / kop atas (opsional)" hint="Satu baris per baris kop, mis. nama pemerintah daerah lalu nama dinas pendidikan.">
+                    <textarea rows={2} value={settings.instansi} onChange={(e) => set("instansi", e.target.value)} className={inputCls} />
+                  </Field>
+                </div>
                 <Field label="Nama sekolah">
                   <input value={settings.schoolName} onChange={(e) => set("schoolName", e.target.value)} className={inputCls} />
                 </Field>
@@ -950,6 +1044,9 @@ export default function App() {
                 </div>
                 <Field label="Nama ujian">
                   <input value={settings.examTitle} onChange={(e) => set("examTitle", e.target.value)} className={inputCls} />
+                </Field>
+                <Field label="Tahun ajaran" hint="Tampil di judul LJK, mis. 2026/2027.">
+                  <input value={settings.tahunAjaran} onChange={(e) => set("tahunAjaran", e.target.value)} className={inputCls} />
                 </Field>
                 <Field label="Mata pelajaran">
                   <input value={settings.subject} onChange={(e) => set("subject", e.target.value)} className={inputCls} />
@@ -978,18 +1075,27 @@ export default function App() {
                 <Field label="NIP kepala sekolah (opsional)">
                   <input value={settings.principalNip} onChange={(e) => set("principalNip", e.target.value)} className={inputCls} />
                 </Field>
-                <div className="sm:col-span-2">
-                  <Field label="Logo sekolah (opsional)" hint="Tampil di kop laporan PDF. Tidak disimpan setelah halaman ditutup.">
-                    <div className="flex items-center gap-3">
-                      {logo && <img src={logo} alt="Logo sekolah" className="h-12 w-12 rounded border border-slate-200 object-contain" />}
-                      <input type="file" accept="image/*" onChange={(e) => onLogo(e.target.files?.[0])} className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100" />
-                      {logo && (
-                        <button type="button" onClick={() => setLogo("")} className={btnGhost}>
-                          Hapus
-                        </button>
-                      )}
-                    </div>
-                  </Field>
+                <div className="grid gap-4 sm:col-span-2 sm:grid-cols-2">
+                  {[
+                    ["L", "Logo kiri (mis. logo daerah)", logoL, setLogoL],
+                    ["R", "Logo kanan (mis. logo sekolah)", logoR, setLogoR],
+                  ].map(([side, label, val, setter]) => (
+                    <Field key={side} label={label} hint="Tampil di kop LJK dan laporan PDF. Disimpan di browser ini.">
+                      <div className="flex items-center gap-3">
+                        {val && <img src={val.src} alt={label} className="h-12 w-12 rounded border border-slate-200 object-contain" />}
+                        <input
+                          type="file" accept="image/*"
+                          onChange={(e) => { onLogo(side, e.target.files?.[0]); e.target.value = ""; }}
+                          className="block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-indigo-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-indigo-700 hover:file:bg-indigo-100"
+                        />
+                        {val && (
+                          <button type="button" onClick={() => setter(null)} className={btnGhost}>
+                            Hapus
+                          </button>
+                        )}
+                      </div>
+                    </Field>
+                  ))}
                 </div>
               </div>
             </Card>
@@ -1278,12 +1384,12 @@ export default function App() {
             }
           >
             <p className="mb-4 text-sm text-slate-600">
-              Lembar A4 dengan {totalQ} nomor (A–E) dalam 3 kolom. Jumlah soal, nama sekolah, ujian, dan mata pelajaran
+              Lembar A4 dengan {totalQ} nomor (A–E) dalam 3 kolom. Jumlah soal, kop, logo, judul, mata pelajaran, dan kelas
               mengikuti isian di tab Kunci Jawaban dan Pengaturan. Cetak dengan skala 100% agar hasil foto mudah dibaca AI.
             </p>
             <div className="mx-auto max-w-md">
               <ScaledPage>
-                <LjkTemplate meta={settings} totalQ={totalQ} />
+                <LjkTemplate meta={settings} totalQ={totalQ} logoL={logoL} logoR={logoR} />
               </ScaledPage>
             </div>
           </Card>
@@ -1293,7 +1399,7 @@ export default function App() {
       {/* Salinan ukuran penuh untuk ditangkap html2canvas (tersembunyi di belakang halaman) */}
       <div aria-hidden="true" style={{ position: "fixed", top: 0, left: 0, zIndex: -1, pointerEvents: "none" }}>
         <div ref={reportRef}>{sorted.length > 0 && renderReport(false)}</div>
-        <div ref={templateRef}>{tab === "template" && <LjkTemplate meta={settings} totalQ={totalQ} />}</div>
+        <div ref={templateRef}>{tab === "template" && <LjkTemplate meta={settings} totalQ={totalQ} logoL={logoL} logoR={logoR} />}</div>
       </div>
     </div>
   );
