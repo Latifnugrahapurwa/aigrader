@@ -107,7 +107,6 @@ function paginate(rows) {
 /* ───────────────────────── Gemini Vision ───────────────────────── */
 
 function buildPrompt(n) {
-  const perCol = Math.ceil(n / 3);
   return (
     `Analisis gambar LJK ini, deteksi nama siswa dan jawaban pilihan ganda nomor 1 sampai ${n}.\n` +
     `Outputkan JSON murni:\n` +
@@ -117,8 +116,10 @@ function buildPrompt(n) {
     `- Jawaban hanya huruf A, B, C, D, atau E.\n` +
     `- Jawaban siswa bisa berupa tanda silang (X) atau bulatan yang dihitamkan (●).\n` +
     `- Jika sebuah nomor kosong, tidak jelas, atau ditandai lebih dari satu pilihan, isi "ans" dengan "-".\n` +
-    `- Jika LJK berformat 3 kolom, baca tiap kolom dari atas ke bawah, dimulai dari kolom kiri ` +
-    `(kolom 1 berisi nomor 1–${perCol}, kolom 2 nomor ${perCol + 1}–${perCol * 2}, dan seterusnya).\n` +
+    `- LJK berbentuk tabel dengan beberapa kotak; tiap kotak berisi 10 nomor berurutan ` +
+    `(kotak 1 nomor 1–10, kotak 2 nomor 11–20, dan seterusnya). Baca kotak dari kiri ke kanan, lalu baris kotak berikutnya. ` +
+    `Gunakan nomor yang tercetak di sebelah kiri setiap baris.\n` +
+    `- Abaikan deretan huruf A B C D E di bawah tiap kotak; itu hanya penanda, bukan soal.\n` +
     `- Sertakan semua nomor dari 1 sampai ${n}.\n` +
     `- Balas hanya dengan JSON, tanpa penjelasan dan tanpa tanda markdown.`
   );
@@ -508,86 +509,138 @@ function ReportPage({ meta, logoL, logoR, rows, startIndex, pageNo, pageCount, f
   );
 }
 
-/* ───────────────────────── Template LJK 3 kolom (inline style, hex) ───────────────────────── */
+/* ───────────────────────── Template LJK: geometri bersama (preview SVG & PDF vektor) ───────────────────────── */
+
+// Satu sumber geometri dipakai dua kali: preview web (SVG) dan berkas PDF (jsPDF, vektor).
+// Dengan begitu isi PDF identik dengan preview dan tidak lagi melewati html2canvas.
+const LJK = {
+  PAD_T: 40, PAD_BOT: 46, PAD_X: 40,
+  H_ID: 84, H_KOP: 92, H_TITLE: 66, H_INFO: 44, H_NOTE: 30, ID_W: 368,
+  PER_BLOCK: 10, MAX_PER_ROW: 4,
+  HEAD_H: 24, NUMW: 32, FOOT_GAP: 6, FOOT_H: 22, GAP_X: 12, GAP_Y: 14,
+};
+const LJK_NOTE =
+  "Petunjuk: pilih satu jawaban untuk setiap nomor dengan menghitamkan bulatan (●) atau memberi tanda silang (X). " +
+  "Gunakan pensil 2B atau pulpen hitam, dan jangan melipat lembar ini.";
+// Pusat visual huruf kapital & angka Arial ≈ 0.358em di atas garis dasar.
+const midBase = (cy, size) => cy + size * 0.358;
+// Garis dasar teks pada kotak baris (top, tinggi baris, ukuran font) — meniru tata letak CSS.
+const lineBase = (top, lh, fs) => top + (lh - 1.117 * fs) / 2 + 0.905 * fs;
+
+function ljkGridAvail() {
+  const { PAD_T, PAD_BOT, H_ID, H_KOP, H_TITLE, H_INFO, H_NOTE } = LJK;
+  return PAGE_H - PAD_T - PAD_BOT - (H_ID + H_KOP + H_TITLE + H_INFO + H_NOTE) - (10 + 12 + 8 + 6 + 8);
+}
+
+// Kotak pilihan ganda berbentuk tabel: tiap blok 10 nomor, baris judul A–E, garis sel, bulatan berhuruf,
+// dan deretan kotak A–E terpisah di bawah blok (seperti box_pilihan.png).
+function ljkGrid(totalQ) {
+  const { PER_BLOCK, MAX_PER_ROW, HEAD_H, NUMW, FOOT_GAP, FOOT_H, GAP_X, GAP_Y, PAD_X } = LJK;
+  const M = 1; // ruang untuk setengah tebal garis tepi
+  const GW = PAGE_W - 2 * PAD_X;
+  const nBlocks = Math.ceil(totalQ / PER_BLOCK);
+  const nBands = Math.ceil(nBlocks / MAX_PER_ROW);
+  const blockW = (GW - 2 * M - (MAX_PER_ROW - 1) * GAP_X) / MAX_PER_ROW;
+  const cellW = (blockW - NUMW) / 5;
+  const overhead = HEAD_H + FOOT_GAP + FOOT_H;
+  const rowH = Math.max(15, Math.min(44, Math.floor((ljkGridAvail() - 2 * M - nBands * overhead - (nBands - 1) * GAP_Y) / (nBands * PER_BLOCK))));
+  const b = Math.max(10, Math.min(24, Math.round(cellW - 6), rowH - 8)); // diameter bulatan
+  const fs = Math.round(b * 0.5 * 10) / 10;
+  const bandH = overhead + PER_BLOCK * rowH;
+  const H = M * 2 + nBands * bandH + (nBands - 1) * GAP_Y;
+  const THIN = 0.8, THICK = 1.8;
+  const P = [];
+  const line = (x1, y1, x2, y2, sw) => P.push({ k: "line", x1, y1, x2, y2, sw });
+  const text = (x, y, s, size, bold, anchor, color) => P.push({ k: "text", x, y, s, size, bold, anchor, color: color || "#000000" });
+
+  for (let bi = 0; bi < nBlocks; bi++) {
+    const band = Math.floor(bi / MAX_PER_ROW), col = bi % MAX_PER_ROW;
+    const inBand = band === nBands - 1 ? nBlocks - band * MAX_PER_ROW : MAX_PER_ROW;
+    const bandW = inBand * blockW + (inBand - 1) * GAP_X;
+    const x = M + (GW - 2 * M - bandW) / 2 + col * (blockW + GAP_X);
+    const y = M + band * (bandH + GAP_Y);
+    const start = bi * PER_BLOCK;
+    const rows = Math.min(PER_BLOCK, totalQ - start);
+    const bh = HEAD_H + rows * rowH;
+
+    // garis sel (tipis)
+    for (let r = 0; r < rows; r++) line(x, y + HEAD_H + r * rowH, x + blockW, y + HEAD_H + r * rowH, THIN);
+    for (let i = 0; i < 5; i++) line(x + NUMW + i * cellW, y, x + NUMW + i * cellW, y + bh, THIN);
+    // bingkai luar (tebal)
+    P.push({ k: "rect", x, y, w: blockW, h: bh, sw: THICK });
+
+    // judul A–E
+    LETTERS.forEach((l, i) => text(x + NUMW + (i + 0.5) * cellW, midBase(y + HEAD_H / 2, 12), l, 12, true, "middle"));
+
+    // baris soal
+    for (let r = 0; r < rows; r++) {
+      const n = start + r + 1;
+      const cy = y + HEAD_H + r * rowH + rowH / 2;
+      text(x + NUMW - 6, midBase(cy, 12.5), `${n}.`, 12.5, true, "end");
+      LETTERS.forEach((l, i) => {
+        const cx = x + NUMW + (i + 0.5) * cellW;
+        P.push({ k: "circle", cx, cy, r: (b - 1.4) / 2, sw: 1.4 });
+        text(cx, midBase(cy, fs), l, fs, false, "middle", "#6b7280");
+      });
+    }
+
+    // deretan kotak A–E terpisah di bawah blok
+    const fy = y + bh + FOOT_GAP;
+    LETTERS.forEach((l, i) => {
+      const fx = x + NUMW + i * cellW;
+      P.push({ k: "rect", x: fx, y: fy, w: cellW, h: FOOT_H, sw: 1.2 });
+      text(fx + cellW / 2, midBase(fy + FOOT_H / 2, 12), l, 12, true, "middle");
+    });
+  }
+  return { w: GW, h: H, prims: P };
+}
+
+function ljkIdPrims(schoolName) {
+  const school = String(schoolName || "").toUpperCase();
+  const rows = [["No. Peserta", "", 1, 24], ["Nama", "", 25, 34], ["Sekolah", school, 59, 24]];
+  const P = [
+    { k: "rect", x: 1, y: 1, w: LJK.ID_W - 2, h: LJK.H_ID - 2, sw: 1.5 },
+    { k: "line", x1: 106, y1: 1, x2: 106, y2: LJK.H_ID - 1, sw: 1.5 },
+  ];
+  const valSize = Math.min(12, (LJK.ID_W - 106 - 16) / Math.max(1, school.length * 0.66));
+  rows.forEach(([k, v, top, h], i) => {
+    const cy = top + h / 2;
+    if (i > 0) P.push({ k: "line", x1: 1, y1: top, x2: LJK.ID_W - 1, y2: top, sw: 1.5 });
+    P.push({ k: "text", x: 9, y: midBase(cy, 13), s: k, size: 13, bold: true, anchor: "start", color: "#000000" });
+    if (v) P.push({ k: "text", x: 114, y: midBase(cy, valSize), s: v, size: valSize, bold: false, anchor: "start", color: "#000000" });
+  });
+  return P;
+}
+
+function SvgPrims({ prims }) {
+  const FONT = "Arial, Helvetica, sans-serif";
+  return (
+    <>
+      {prims.map((p, i) => {
+        if (p.k === "line") return <line key={i} x1={p.x1} y1={p.y1} x2={p.x2} y2={p.y2} stroke="#000000" strokeWidth={p.sw} />;
+        if (p.k === "rect") return <rect key={i} x={p.x} y={p.y} width={p.w} height={p.h} fill="none" stroke="#000000" strokeWidth={p.sw} />;
+        if (p.k === "circle") return <circle key={i} cx={p.cx} cy={p.cy} r={p.r} fill="none" stroke="#000000" strokeWidth={p.sw} />;
+        return (
+          <text key={i} x={p.x} y={p.y} textAnchor={p.anchor} fontFamily={FONT} fontSize={p.size} fontWeight={p.bold ? 700 : 400} fill={p.color}>
+            {p.s}
+          </text>
+        );
+      })}
+    </>
+  );
+}
 
 function LjkTemplate({ meta, totalQ, logoL, logoR }) {
   const FONT = "Arial, Helvetica, sans-serif";
-
-  // Tinggi setiap blok dibuat tetap supaya komposisi identik di preview web dan di PDF.
-  const PAD_T = 40, PAD_BOT = 46;
-  const H_ID = 84, H_KOP = 92, H_TITLE = 66, H_INFO = 44, H_NOTE = 30;
-  const GAP_SUM = 10 + 12 + 8 + 6 + 8;
-  const GRID_H = PAGE_H - PAD_T - PAD_BOT - (H_ID + H_KOP + H_TITLE + H_INFO + H_NOTE) - GAP_SUM;
-
-  // Grid jawaban: tinggi baris menyesuaikan jumlah soal agar grid mengisi sisa halaman.
-  const rows = Math.ceil(totalQ / 3);
-  const HEAD_H = 28, FOOT_H = 10, NUMW = 30, COLGAP = 15;
-  const rowH = Math.max(16, Math.min(48, Math.floor((GRID_H - HEAD_H - FOOT_H) / rows)));
-  const b = Math.max(12, Math.min(26, rowH - 12)); // diameter bulatan
-  const GAP = b >= 22 ? 10 : 8;
-  const GW = PAGE_W - 80;
-  const COLW = (GW - 2 * COLGAP) / 3;
-  const contentW = NUMW + 5 * b + 4 * GAP;
-  const boxH = HEAD_H + rows * rowH + FOOT_H;
-  const fs = Math.round(b * 0.5 * 10) / 10;
-  const fsNum = b >= 20 ? 13 : 12;
-  // Huruf kapital & angka Arial setinggi ≈ 0.716em, pusat visualnya ≈ 0.358em di atas garis dasar.
-  // Posisi y dihitung manual (bukan dominant-baseline atau perataan CSS) agar sama persis di browser dan PDF.
-  const dy = (size) => size * 0.358;
+  const { PAD_T, PAD_BOT, PAD_X, H_ID, H_KOP, H_TITLE, H_INFO, H_NOTE, ID_W } = LJK;
+  const grid = ljkGrid(totalQ);
   const corner = (pos) => <div style={{ position: "absolute", width: 18, height: 18, background: "#000000", ...pos }} />;
-
-  const columns = [0, 1, 2].map((c) => {
-    const x = c * (COLW + COLGAP);
-    const x0 = x + (COLW - contentW) / 2;
-    const cx = (i) => x0 + NUMW + b / 2 + i * (b + GAP);
-    const items = [];
-    items.push(
-      <rect key="box" x={x + 0.75} y={0.75} width={COLW - 1.5} height={boxH - 1.5} rx={4} fill="none" stroke="#000000" strokeWidth="1.5" />
-    );
-    LETTERS.forEach((l, i) =>
-      items.push(
-        <text key={`h${l}`} x={cx(i)} y={HEAD_H / 2 + dy(12)} textAnchor="middle" fontFamily={FONT} fontSize="12" fontWeight="700" fill="#000000">
-          {l}
-        </text>
-      )
-    );
-    for (let r = 0; r < rows; r++) {
-      const n = c * rows + r + 1;
-      if (n > totalQ) break;
-      const cy = HEAD_H + r * rowH + rowH / 2;
-      items.push(
-        <text key={`n${n}`} x={x0 + NUMW - GAP} y={cy + dy(fsNum)} textAnchor="end" fontFamily={FONT} fontSize={fsNum} fontWeight="700" fill="#000000">
-          {n}
-        </text>
-      );
-      LETTERS.forEach((l, i) => {
-        items.push(<circle key={`c${n}${l}`} cx={cx(i)} cy={cy} r={(b - 1.5) / 2} fill="none" stroke="#000000" strokeWidth="1.5" />);
-        items.push(
-          <text key={`t${n}${l}`} x={cx(i)} y={cy + dy(fs)} textAnchor="middle" fontFamily={FONT} fontSize={fs} fill="#6b7280">
-            {l}
-          </text>
-        );
-      });
-    }
-    return <g key={c}>{items}</g>;
-  });
-
-  // Kotak identitas digambar sebagai SVG (bukan tabel HTML) agar teks tepat di tengah barisnya di PDF.
-  const school = String(meta.schoolName || "").toUpperCase();
-  const idRows = [
-    ["No. Peserta", "", 1, 24],
-    ["Nama", "", 25, 34],
-    ["Sekolah", school, 59, 24],
-  ];
-  const valFs = 12;
-  const valAvail = 366 - 106 - 16;
-  const valFit = school.length * valFs * 0.62 > valAvail ? { textLength: valAvail, lengthAdjust: "spacingAndGlyphs" } : {};
 
   return (
     <div
       data-page
       style={{
-        width: PAGE_W, height: PAGE_H, boxSizing: "border-box", padding: `${PAD_T}px 40px ${PAD_BOT}px`, background: "#ffffff",
+        width: PAGE_W, height: PAGE_H, boxSizing: "border-box", padding: `${PAD_T}px ${PAD_X}px ${PAD_BOT}px`, background: "#ffffff",
         color: "#000000", fontFamily: FONT, position: "relative", overflow: "hidden",
       }}
     >
@@ -598,21 +651,8 @@ function LjkTemplate({ meta, totalQ, logoL, logoR }) {
 
       {/* Kotak identitas siswa (kanan atas) */}
       <div style={{ display: "flex", justifyContent: "flex-end", height: H_ID }}>
-        <svg width={368} height={H_ID} viewBox={`0 0 368 ${H_ID}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
-          <rect x={1} y={1} width={366} height={82} fill="none" stroke="#000000" strokeWidth="1.5" />
-          <line x1={106} y1={1} x2={106} y2={83} stroke="#000000" strokeWidth="1.5" />
-          {idRows.map(([k, v, top, h], i) => {
-            const cy = top + h / 2;
-            return (
-              <g key={k}>
-                {i > 0 && <line x1={1} y1={top} x2={367} y2={top} stroke="#000000" strokeWidth="1.5" />}
-                <text x={9} y={cy + dy(13)} fontFamily={FONT} fontSize="13" fontWeight="700" fill="#000000">{k}</text>
-                {v && (
-                  <text x={114} y={cy + dy(valFs)} fontFamily={FONT} fontSize={valFs} fill="#000000" {...valFit}>{v}</text>
-                )}
-              </g>
-            );
-          })}
+        <svg width={ID_W} height={H_ID} viewBox={`0 0 ${ID_W} ${H_ID}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
+          <SvgPrims prims={ljkIdPrims(meta.schoolName)} />
         </svg>
       </div>
 
@@ -638,18 +678,122 @@ function LjkTemplate({ meta, totalQ, logoL, logoR }) {
         ))}
       </div>
 
-      <div style={{ marginTop: 6, height: H_NOTE, fontSize: 10.5, lineHeight: "15px" }}>
-        Petunjuk: pilih satu jawaban untuk setiap nomor dengan menghitamkan bulatan (●) atau memberi tanda silang (X).
-        Gunakan pensil 2B atau pulpen hitam, dan jangan melipat lembar ini.
-      </div>
+      <div style={{ marginTop: 6, height: H_NOTE, fontSize: 10.5, lineHeight: "15px" }}>{LJK_NOTE}</div>
 
       <div style={{ marginTop: 8 }}>
-        <svg width={GW} height={boxH} viewBox={`0 0 ${GW} ${boxH}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
-          {columns}
+        <svg width={grid.w} height={grid.h} viewBox={`0 0 ${grid.w} ${grid.h}`} xmlns="http://www.w3.org/2000/svg" style={{ display: "block" }}>
+          <SvgPrims prims={grid.prims} />
         </svg>
       </div>
     </div>
   );
+}
+
+/* PDF vektor untuk template LJK (tajam, tanpa html2canvas, posisi teks presisi) */
+function buildLjkPdf({ meta, totalQ, logoL, logoR }) {
+  const doc = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+  const S = doc.internal.pageSize.getWidth() / PAGE_W; // pt per px
+  const px = (v) => v * S;
+  const rgb = (h) => [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16)];
+  const { PAD_T, PAD_X, H_ID, H_KOP, H_TITLE, H_INFO, H_NOTE, ID_W } = LJK;
+
+  const drawPrims = (prims, ox, oy) => {
+    doc.setDrawColor(0, 0, 0);
+    prims.forEach((p) => {
+      if (p.k === "text") {
+        doc.setFont("helvetica", p.bold ? "bold" : "normal");
+        doc.setFontSize(px(p.size));
+        doc.setTextColor(...rgb(p.color));
+        doc.text(String(p.s), px(ox + p.x), px(oy + p.y), { align: p.anchor === "middle" ? "center" : p.anchor === "end" ? "right" : "left" });
+        return;
+      }
+      doc.setLineWidth(px(p.sw));
+      if (p.k === "line") doc.line(px(ox + p.x1), px(oy + p.y1), px(ox + p.x2), px(oy + p.y2));
+      else if (p.k === "rect") doc.rect(px(ox + p.x), px(oy + p.y), px(p.w), px(p.h), "S");
+      else if (p.k === "circle") doc.circle(px(ox + p.cx), px(oy + p.cy), px(p.r), "S");
+    });
+  };
+  const put = (s, x, baseY, size, { bold = false, font = "helvetica", style, align = "left" } = {}) => {
+    doc.setFont(font, style || (bold ? "bold" : "normal"));
+    doc.setFontSize(px(size));
+    doc.setTextColor(0, 0, 0);
+    doc.text(String(s), px(x), px(baseY), { align });
+  };
+
+  // penanda sudut
+  doc.setFillColor(0, 0, 0);
+  [[16, 16], [PAGE_W - 34, 16], [16, PAGE_H - 34], [PAGE_W - 34, PAGE_H - 34]].forEach(([x, y]) => doc.rect(px(x), px(y), px(18), px(18), "F"));
+
+  // kotak identitas
+  drawPrims(ljkIdPrims(meta.schoolName), PAGE_W - PAD_X - ID_W, PAD_T);
+
+  // kop surat
+  const kopTop = PAD_T + H_ID + 10;
+  const BOX = 80;
+  const lines = String(meta.instansi || "").split("\n").map((s) => s.trim()).filter(Boolean).map((t) => t.toUpperCase());
+  lines.push(String(meta.schoolName || "").toUpperCase());
+  const hasAddr = !!meta.address;
+  const textH = lines.length * 20 + (hasAddr ? 14 : 0);
+  const rowH = Math.max(BOX, textH);
+  const textW = PAGE_W - 2 * PAD_X - 2 * (BOX + 12);
+  let ty = kopTop + (rowH - textH) / 2;
+  lines.forEach((t) => {
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(px(15));
+    const w = doc.getTextWidth(t) / S;
+    const size = w > textW ? (15 * textW) / w : 15;
+    put(t, PAGE_W / 2, lineBase(ty, 20, size), size, { bold: true, align: "center" });
+    ty += 20;
+  });
+  if (hasAddr) {
+    doc.setFont("times", "italic");
+    doc.setFontSize(px(11));
+    const w = doc.getTextWidth(meta.address) / S;
+    const size = w > textW ? (11 * textW) / w : 11;
+    put(meta.address, PAGE_W / 2, lineBase(ty, 14, size), size, { font: "times", style: "italic", align: "center" });
+  }
+  [[logoL, PAD_X], [logoR, PAGE_W - PAD_X - BOX]].forEach(([l, bx]) => {
+    const f = fitBox(l, BOX);
+    if (!f) return;
+    try {
+      doc.addImage(l.src, "PNG", px(bx + (BOX - f.w) / 2), px(kopTop + (rowH - f.h) / 2), px(f.w), px(f.h));
+    } catch {
+      /* logo gagal disematkan: lewati */
+    }
+  });
+  doc.setFillColor(0, 0, 0);
+  doc.rect(px(PAD_X), px(kopTop + rowH + 6), px(PAGE_W - 2 * PAD_X), px(3), "F");
+  doc.rect(px(PAD_X), px(kopTop + rowH + 11), px(PAGE_W - 2 * PAD_X), px(1), "F");
+
+  // judul
+  const titleTop = kopTop + Math.max(H_KOP, rowH + 12) + 12;
+  let y = titleTop;
+  put("LEMBAR JAWAB", PAGE_W / 2, lineBase(y, 28, 22), 22, { bold: true, align: "center" });
+  y += 28;
+  if (meta.examTitle) {
+    put(String(meta.examTitle).toUpperCase(), PAGE_W / 2, lineBase(y, 18, 14), 14, { bold: true, align: "center" });
+    y += 18;
+  }
+  if (meta.tahunAjaran) put(`TAHUN AJARAN ${meta.tahunAjaran}`, PAGE_W / 2, lineBase(y, 17, 13), 13, { align: "center" });
+
+  // mata pelajaran & kelas
+  const infoTop = titleTop + H_TITLE + 8;
+  [["Mata Pelajaran", meta.subject], ["Kelas", meta.className]].forEach(([k, v], i) => {
+    const base = lineBase(infoTop + i * 22, 22, 13);
+    put(k, PAD_X + 140, base, 13, { bold: true });
+    put(":", PAD_X + 140 + 120, base, 13, { bold: true });
+    put(v || "", PAD_X + 140 + 136, base, 13);
+  });
+
+  // petunjuk
+  const noteTop = infoTop + H_INFO + 6;
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(px(10.5));
+  doc.splitTextToSize(LJK_NOTE, px(PAGE_W - 2 * PAD_X)).forEach((ln, i) => put(ln, PAD_X, lineBase(noteTop + i * 15, 15, 10.5), 10.5));
+
+  // kotak pilihan ganda
+  drawPrims(ljkGrid(totalQ).prims, PAD_X, noteTop + H_NOTE + 8);
+  return doc;
 }
 
 /* ───────────────────────── Aplikasi utama ───────────────────────── */
@@ -692,7 +836,6 @@ export default function App() {
   const filesRef = useRef(new Map());
   const runningRef = useRef(false);
   const reportRef = useRef(null);
-  const templateRef = useRef(null);
   const lastChecked = useRef("");
 
   const totalQ = settings.totalQ;
@@ -865,11 +1008,10 @@ export default function App() {
   };
 
   const exportTemplate = async () => {
-    if (!templateRef.current) return;
     setBusy("template");
     try {
-      await sleep(50);
-      await exportPagesToPdf([templateRef.current.querySelector("[data-page]")], `Template-LJK-${totalQ}-soal.pdf`);
+      await sleep(30);
+      buildLjkPdf({ meta: settings, totalQ, logoL, logoR }).save(`Template-LJK-${totalQ}-soal.pdf`);
     } catch (e) {
       setNotice("Gagal membuat PDF: " + (e.message || e));
     } finally {
@@ -877,22 +1019,19 @@ export default function App() {
     }
   };
 
-  const printTemplate = async () => {
-    if (!templateRef.current) return;
+  const printTemplate = () => {
     const w = window.open("", "_blank");
+    if (!w) {
+      setNotice("Jendela cetak diblokir browser. Gunakan tombol Unduh PDF lalu cetak dari berkas tersebut.");
+      return;
+    }
     setBusy("print");
     try {
-      const [img] = await pagesToCanvasImages([templateRef.current.querySelector("[data-page]")]);
-      if (!w) {
-        setNotice("Jendela cetak diblokir browser. Gunakan tombol Unduh PDF lalu cetak dari berkas tersebut.");
-        return;
-      }
-      w.document.write(
-        `<!doctype html><title>Template LJK</title><style>@page{size:A4;margin:0}html,body{margin:0}img{width:100%;display:block}</style><img src="${img}" onload="setTimeout(function(){window.print()},200)">`
-      );
-      w.document.close();
+      const doc = buildLjkPdf({ meta: settings, totalQ, logoL, logoR });
+      doc.autoPrint();
+      w.location.href = doc.output("bloburl");
     } catch (e) {
-      if (w) w.close();
+      w.close();
       setNotice("Gagal menyiapkan cetak: " + (e.message || e));
     } finally {
       setBusy("");
@@ -1389,7 +1528,7 @@ export default function App() {
         {/* ── TEMPLATE LJK ── */}
         {tab === "template" && (
           <Card
-            title="Template LJK 3 kolom"
+            title="Template LJK"
             icon={FileText}
             action={
               <div className="flex gap-2">
@@ -1405,7 +1544,7 @@ export default function App() {
             }
           >
             <p className="mb-4 text-sm text-slate-600">
-              Lembar A4 dengan {totalQ} nomor (A–E) dalam 3 kolom. Jumlah soal, kop, logo, judul, mata pelajaran, dan kelas
+              Lembar A4 dengan {totalQ} nomor (A–E) dalam kotak tabel berisi 10 soal per blok. Jumlah soal, kop, logo, judul, mata pelajaran, dan kelas
               mengikuti isian di tab Kunci Jawaban dan Pengaturan. Cetak dengan skala 100% agar hasil foto mudah dibaca AI.
             </p>
             <div className="mx-auto max-w-md">
@@ -1420,7 +1559,6 @@ export default function App() {
       {/* Salinan ukuran penuh untuk ditangkap html2canvas (tersembunyi di belakang halaman) */}
       <div aria-hidden="true" style={{ position: "fixed", top: 0, left: 0, zIndex: -1, pointerEvents: "none" }}>
         <div ref={reportRef}>{sorted.length > 0 && renderReport(false)}</div>
-        <div ref={templateRef}>{tab === "template" && <LjkTemplate meta={settings} totalQ={totalQ} logoL={logoL} logoR={logoR} />}</div>
       </div>
     </div>
   );
